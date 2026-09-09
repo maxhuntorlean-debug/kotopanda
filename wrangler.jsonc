@@ -10,7 +10,17 @@
 	"observability": {
 		"enabled": true
 	},
-	"upload_source_maps": true
+	"upload_source_maps": true,
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "kotopanda",
+			"database_id": "63799c1a-ef72-47d6-a636-627413c7d2a5"
+		}
+	],
+	"assets": {
+		"directory": "./public/"
+	}
 	/**
 	 * Smart Placement
 	 * https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
