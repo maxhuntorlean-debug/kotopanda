@@ -141,3 +141,66 @@ export function resolvePeriodToken(periodParam: string | null, fallback: PeriodK
 	if (periodParam.startsWith("range:")) return periodParam;
 	return PERIOD_OPTIONS.some((p) => p.key === periodParam) ? periodParam : fallback;
 }
+
+function daysBetweenIso(from: string, to: string): number {
+	return Math.round((new Date(`${to}T00:00:00Z`).getTime() - new Date(`${from}T00:00:00Z`).getTime()) / 86400000);
+}
+
+// Сосед периода (для кнопок ◀/▶ рядом с выбором периода) — на один месяц/квартал/год вперёд-назад,
+// если текущий диапазон выровнен по границе месяца/квартала/года (в т.ч. "Текущий месяц"/"Прошлый
+// месяц" — у них from уже 1-е число), иначе сдвигаем произвольный диапазон на его же длину, чтобы
+// соседний период не наезжал на текущий и не оставлял дырки.
+export function shiftPeriodToken(token: string, direction: 1 | -1): string {
+	const { from, to } = periodRangeFromToken(token);
+	const [fy, fm, fd] = from.split("-").map(Number);
+	const [ty, tm, td] = to.split("-").map(Number);
+
+	// "to" либо последний день месяца (полный месяц — "Прошлый месяц"/выбор месяца из подменю),
+	// либо сегодня (ещё не закончившийся "Текущий месяц") — иначе это просто короткий произвольный
+	// диапазон, который случайно начинается с 1-го числа (например, "01–07 сентября"), и его
+	// нельзя путать с целым месяцем: раздел ниже должен сдвинуть именно эти 7 дней, а не месяц целиком.
+	const isFullOrRunningMonth = fd === 1 && fy === ty && fm === tm && (td === lastDayOfMonth(ty, tm) || to === todayIso());
+
+	if (isFullOrRunningMonth) {
+		let y = fy;
+		let m = fm + direction;
+		while (m > 12) {
+			m -= 12;
+			y += 1;
+		}
+		while (m < 1) {
+			m += 12;
+			y -= 1;
+		}
+		const r = monthRange(y, m);
+		return encodeRangeToken(r.from, r.to);
+	}
+
+	if (fd === 1 && fm % 3 === 1 && fy === ty && tm === fm + 2 && td === lastDayOfMonth(ty, tm)) {
+		let y = fy;
+		let q = Math.ceil(fm / 3) + direction;
+		while (q > 4) {
+			q -= 4;
+			y += 1;
+		}
+		while (q < 1) {
+			q += 4;
+			y -= 1;
+		}
+		const r = quarterRange(y, q);
+		return encodeRangeToken(r.from, r.to);
+	}
+
+	if (fm === 1 && fd === 1 && tm === 12 && td === 31 && fy === ty) {
+		const r = yearRange(fy + direction);
+		return encodeRangeToken(r.from, r.to);
+	}
+
+	const spanDays = daysBetweenIso(from, to);
+	if (direction > 0) {
+		const newFrom = addDaysIso(to, 1);
+		return encodeRangeToken(newFrom, addDaysIso(newFrom, spanDays));
+	}
+	const newTo = addDaysIso(from, -1);
+	return encodeRangeToken(addDaysIso(newTo, -spanDays), newTo);
+}

@@ -2,7 +2,8 @@ import { renderPage } from "../layout";
 import { escapeHtml } from "../format";
 import { SUB_TABS_STYLES, renderSubTabs, DRAWER_STYLES, renderSimpleDrawer, MODAL_STYLES, renderConfirmModal, deleteIconSvg } from "../ui";
 import { listRulesForDisplay } from "../rules";
-import { CHART_OF_ACCOUNTS, listOwnAccounts, listCashBoxes, listExpenseItems, listEmployees, listOtherOperations, type ReferenceKind } from "../accounting";
+import { CHART_OF_ACCOUNTS } from "../accounting";
+import { listTestRefItems, type TestRefKind } from "../referencesTest";
 import { BANK_TABS } from "./bank";
 
 const STYLES = `
@@ -108,23 +109,12 @@ function accountLabel(code: string): string {
 export async function renderBankRulesPage(env: Env): Promise<string> {
 	const rules = await listRulesForDisplay(env);
 
-	const ownAccounts = await listOwnAccounts(env);
-	const cashBoxes = await listCashBoxes(env);
-	const expenseItems = await listExpenseItems(env);
-	const employeeItems = await listEmployees(env);
-	const otherOperationItems = await listOtherOperations(env);
-	const { results: suppliers } = await env.DB.prepare(`SELECT name FROM counterparties WHERE is_supplier = 1 ORDER BY name`).all<{ name: string }>();
-	const refLists: Record<ReferenceKind, string[]> = {
-		accounts: ownAccounts.map((a) => a.name),
-		cashBoxes: cashBoxes.map((c) => c.name),
-		suppliers: suppliers.map((s) => s.name),
-		expenses: expenseItems.map((e) => e.name),
-		employees: employeeItems.map((e) => e.name),
-		otherOperations: otherOperationItems.map((o) => o.name),
-	};
+	const neededKinds = Array.from(new Set(CHART_OF_ACCOUNTS.map((a) => a.refKind).filter((k): k is TestRefKind => k !== null)));
+	const refListEntries = await Promise.all(neededKinds.map(async (kind) => [kind, (await listTestRefItems(env, kind)).map((i) => i.name)] as const));
+	const refLists = Object.fromEntries(refListEntries) as Record<TestRefKind, string[]>;
 	const accountSubcontoMap: Record<string, string[]> = {};
 	for (const acc of CHART_OF_ACCOUNTS) {
-		if (acc.refKind) accountSubcontoMap[acc.code] = refLists[acc.refKind];
+		if (acc.refKind) accountSubcontoMap[acc.code] = refLists[acc.refKind] ?? [];
 	}
 
 	const accountOptionsHtml = CHART_OF_ACCOUNTS.map((a) => `<option value="${a.code}">${a.code} — ${escapeHtml(a.name)}</option>`).join("\n");
@@ -272,5 +262,5 @@ export async function renderBankRulesPage(env: Env): Promise<string> {
 	</div>
 	`;
 
-	return renderPage("/bank", "Правила разноски", content);
+	return renderPage("/bank", "Правила разноски", content, env);
 }

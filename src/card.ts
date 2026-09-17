@@ -126,6 +126,12 @@ export async function listPostingCategories(env: Env): Promise<PostingCategoryRo
 	return results;
 }
 
+export async function getPostingCategory(env: Env, id: number): Promise<PostingCategoryRow | null> {
+	return env.DB.prepare(`SELECT id, name, direction, debit_account, debit_subconto, credit_account, credit_subconto FROM posting_categories WHERE id = ?`)
+		.bind(id)
+		.first<PostingCategoryRow>();
+}
+
 export type PostingCategoryInput = {
 	name: string;
 	debitAccount: string;
@@ -213,8 +219,3 @@ export async function balanceAtEndOf(env: Env, accountId: number, dateIso: strin
 	return balanceBefore(env, accountId, dateIso);
 }
 
-export async function updateTransaction(env: Env, id: number, postingCategoryId: number | null, subconto: string | null): Promise<void> {
-	await env.DB.prepare(`UPDATE card_transactions SET posting_category_id = ?, subconto = ? WHERE id = ?`)
-		.bind(postingCategoryId, subconto, id)
-		.run();
-}

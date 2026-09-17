@@ -1,15 +1,22 @@
 import { renderPage } from "../layout";
 import { escapeHtml } from "../format";
-import { listOwnAccounts, listCashBoxes, CHART_OF_ACCOUNTS, REFERENCE_PAGE_PATH, type ReferenceKind } from "../accounting";
+import { SUB_TABS_STYLES, renderSubTabs, type SubTab } from "../ui";
+import { getAuthContext } from "../auth";
 
-const REFERENCE_LABELS: Record<ReferenceKind, string> = {
-	accounts: "Счета",
-	cashBoxes: "Кассы",
-	suppliers: "Поставщики",
-	expenses: "Расходы",
-	employees: "Сотрудники",
-	otherOperations: "Прочие операции",
-};
+// Справочники и План счетов живут тут же (раньше были отдельными пунктами меню "Справочники
+// (тест)"/"План счетов (тест)", см. referencesTest.ts/chartOfAccountsTest.ts), Учёт — то, что
+// было на /settings всегда. Администрирование — тоже вкладка здесь (перенесли из отдельного
+// пункта меню, см. обсуждение "перенесём во Настройки"), но видна только is_admin-ролям.
+export function settingsTabs(env: Env): SubTab[] {
+	const auth = getAuthContext(env);
+	const tabs: SubTab[] = [
+		{ href: "/settings/references", label: "Справочники" },
+		{ href: "/settings/chart", label: "План счетов" },
+		{ href: "/settings", label: "Учёт" },
+	];
+	if (auth?.isAdmin) tabs.push({ href: "/settings/admin", label: "Администрирование" });
+	return tabs;
+}
 
 const STYLES = `
 	.table-card {
@@ -42,12 +49,13 @@ const STYLES = `
 		align-items: center;
 		gap: 8px;
 	}
-	.inline-form select {
+	.inline-form input[type="text"] {
 		padding: 7px 10px;
 		border: 1px solid var(--border);
 		border-radius: 8px;
 		font: inherit;
 		font-size: 13px;
+		width: 220px;
 	}
 	.inline-form button {
 		background: var(--panel);
@@ -56,58 +64,25 @@ const STYLES = `
 		padding: 6px 10px;
 		cursor: pointer;
 	}
-	.muted { color: var(--text-muted); }
-	.section-title {
-		font-size: 15px;
-		margin: 24px 0 12px;
-	}
 `;
 
 export async function renderSettingsPage(env: Env): Promise<string> {
 	const bankAccount = await env.DB.prepare(`SELECT posting_subconto FROM bank_accounts LIMIT 1`).first<{ posting_subconto: string | null }>();
-	const cashRegisterKotopanda = await env.DB.prepare(`SELECT posting_subconto FROM cash_registers WHERE code = 'kotopanda'`).first<{ posting_subconto: string | null }>();
-	const cashRegisterElitka = await env.DB.prepare(`SELECT posting_subconto FROM cash_registers WHERE code = 'elitka'`).first<{ posting_subconto: string | null }>();
 	const cardAccount = await env.DB.prepare(`SELECT posting_subconto FROM card_accounts LIMIT 1`).first<{ posting_subconto: string | null }>();
-	const offsetSettings = await env.DB.prepare(`SELECT posting_subconto FROM offset_settings LIMIT 1`).first<{ posting_subconto: string | null }>();
-	const ownAccounts = await listOwnAccounts(env);
-	const cashBoxes = await listCashBoxes(env);
 
+	// Касса Котопанда/Элитка и Взаимозачёт убраны из этой таблицы — боевые cash_registers/
+	// offset_settings снесены вместе со старыми модулями (см. обсуждение "тестовые станут
+	// боевыми"); у новой Кассы своя, не настраиваемая тут привязка субконто
+	// (TEST_CASH_REGISTER_SUBCONTO_NAME в cashTest.ts), а Взаимозачёт пока без функционала.
+	// Субконто Приватбанка/Карточки — свободный текст: справочник "Счета" (own_accounts),
+	// который раньше подсказывал варианты, снесён вместе с Бухгалтерией.
 	const rowsHtml = `
 		<tr>
 			<td>Приватбанк</td>
 			<td class="acc">31</td>
 			<td>
 				<form method="post" action="/bank/settings" class="inline-form">
-					<select name="posting_subconto">
-						<option value="">Без субконто</option>
-						${ownAccounts.map((a) => `<option value="${escapeHtml(a.name)}" ${a.name === bankAccount?.posting_subconto ? "selected" : ""}>${escapeHtml(a.name)}</option>`).join("\n")}
-					</select>
-					<button type="submit" title="Сохранить">💾</button>
-				</form>
-			</td>
-		</tr>
-		<tr>
-			<td>Касса Котопанда</td>
-			<td class="acc">30</td>
-			<td>
-				<form method="post" action="/sales-kotopanda/settings" class="inline-form">
-					<select name="posting_subconto">
-						<option value="">Без субконто</option>
-						${cashBoxes.map((c) => `<option value="${escapeHtml(c.name)}" ${c.name === cashRegisterKotopanda?.posting_subconto ? "selected" : ""}>${escapeHtml(c.name)}</option>`).join("\n")}
-					</select>
-					<button type="submit" title="Сохранить">💾</button>
-				</form>
-			</td>
-		</tr>
-		<tr>
-			<td>Касса Элитка</td>
-			<td class="acc">30</td>
-			<td>
-				<form method="post" action="/sales-elitka/settings" class="inline-form">
-					<select name="posting_subconto">
-						<option value="">Без субконто</option>
-						${cashBoxes.map((c) => `<option value="${escapeHtml(c.name)}" ${c.name === cashRegisterElitka?.posting_subconto ? "selected" : ""}>${escapeHtml(c.name)}</option>`).join("\n")}
-					</select>
+					<input type="text" name="posting_subconto" value="${bankAccount?.posting_subconto ? escapeHtml(bankAccount.posting_subconto) : ""}" placeholder="Без субконто" />
 					<button type="submit" title="Сохранить">💾</button>
 				</form>
 			</td>
@@ -117,43 +92,19 @@ export async function renderSettingsPage(env: Env): Promise<string> {
 			<td class="acc">31</td>
 			<td>
 				<form method="post" action="/card-universal/settings" class="inline-form">
-					<select name="posting_subconto">
-						<option value="">Без субконто</option>
-						${ownAccounts.map((a) => `<option value="${escapeHtml(a.name)}" ${a.name === cardAccount?.posting_subconto ? "selected" : ""}>${escapeHtml(a.name)}</option>`).join("\n")}
-					</select>
-					<button type="submit" title="Сохранить">💾</button>
-				</form>
-			</td>
-		</tr>
-		<tr>
-			<td>Взаимозачёт</td>
-			<td class="acc">30</td>
-			<td>
-				<form method="post" action="/offset/settings" class="inline-form">
-					<select name="posting_subconto">
-						<option value="">Без субконто</option>
-						${cashBoxes.map((c) => `<option value="${escapeHtml(c.name)}" ${c.name === offsetSettings?.posting_subconto ? "selected" : ""}>${escapeHtml(c.name)}</option>`).join("\n")}
-					</select>
+					<input type="text" name="posting_subconto" value="${cardAccount?.posting_subconto ? escapeHtml(cardAccount.posting_subconto) : ""}" placeholder="Без субконто" />
 					<button type="submit" title="Сохранить">💾</button>
 				</form>
 			</td>
 		</tr>
 	`;
 
-	const chartRowsHtml = CHART_OF_ACCOUNTS.map(
-		(a) => `
-		<tr>
-			<td class="acc">${a.code}</td>
-			<td>${escapeHtml(a.name)}</td>
-			<td>${a.refKind ? `<a href="${REFERENCE_PAGE_PATH[a.refKind]}">${REFERENCE_LABELS[a.refKind]}</a>` : `<span class="muted">—</span>`}</td>
-		</tr>`,
-	).join("\n");
-
 	const content = `
-	<style>${STYLES}</style>
+	<style>${STYLES}${SUB_TABS_STYLES}</style>
 	<div class="topbar">
 		<h1>Настройки</h1>
 	</div>
+	${renderSubTabs(settingsTabs(env), "/settings")}
 
 	<div class="table-card">
 		<table>
@@ -161,15 +112,7 @@ export async function renderSettingsPage(env: Env): Promise<string> {
 			<tbody>${rowsHtml}</tbody>
 		</table>
 	</div>
-
-	<h2 class="section-title">План счетов</h2>
-	<div class="table-card">
-		<table>
-			<thead><tr><th>Код</th><th>Название</th><th>Справочник</th></tr></thead>
-			<tbody>${chartRowsHtml}</tbody>
-		</table>
-	</div>
 	`;
 
-	return renderPage("/settings", "Настройки", content);
+	return renderPage("/settings", "Настройки", content, env);
 }

@@ -1,6 +1,12 @@
 import { fetchPrivatBalanceAnchor, fetchPrivatTransactions, type PrivatTransaction } from "./privat";
 import { createRuleMatcher } from "./rules";
 
+// Банк переходит на новую (тестовую) схему разноски — старые данные и правила разноски
+// очищены (см. обсуждение "тестовые станут боевыми"), поэтому первая синхронизация после
+// очистки не должна утягивать всю историю или "последние 30 дней", а должна начинаться
+// ровно с той даты, с которой дальше операции будут вручную разноситься в новые таблицы.
+const BANK_SYNC_START_DATE = "2026-09-01";
+
 function displayDateToIso(d: string): string {
 	const [day, month, year] = d.split(".");
 	return `${year}-${month}-${day}`;
@@ -24,8 +30,10 @@ export async function syncBankAccount(env: Env): Promise<SyncResult> {
 
 	const today = new Date().toISOString().slice(0, 10);
 	// Начинаем с даты последней сохранённой операции (включительно) — новые операции
-	// в этот же день не потеряются, а дубликаты отсеются через INSERT OR IGNORE.
-	const startDate = lastDate?.max_date ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+	// в этот же день не потеряются, а дубликаты отсеются через INSERT OR IGNORE. Если операций
+	// в базе ещё нет вовсе (первая синхронизация после очистки) — с BANK_SYNC_START_DATE, а не
+	// с "последних 30 дней", как раньше.
+	const startDate = lastDate?.max_date ?? BANK_SYNC_START_DATE;
 
 	const transactions = await fetchPrivatTransactions(env, account.iban, startDate, today);
 

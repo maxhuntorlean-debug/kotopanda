@@ -1,6 +1,6 @@
 import { renderPage, NAV_ITEMS } from "../layout";
 
-export function renderPlaceholderPage(href: string): string {
+export function renderPlaceholderPage(href: string, env: Env): string {
 	const item = NAV_ITEMS.find((i) => i.href === href);
 	const title = item ? item.label : "Страница";
 	const content = `
@@ -12,5 +12,5 @@ export function renderPlaceholderPage(href: string): string {
 		<p>Раздел в разработке</p>
 	</div>
 	`;
-	return renderPage(href, title, content);
+	return renderPage(href, title, content, env);
 }

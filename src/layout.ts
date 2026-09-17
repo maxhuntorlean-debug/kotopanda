@@ -1,23 +1,29 @@
+import { getAuthContext } from "./auth";
+import { escapeHtml } from "./format";
+
 export type NavItem = {
 	href: string;
 	label: string;
 	icon: string;
+	section: string;
 };
 
+// section — ключ из auth.ts SECTIONS, по нему фильтруется меню под текущего пользователя
+// (см. renderPage). "Администрирование" сюда не входит — это теперь вкладка внутри "Настройки"
+// (см. settings.ts), а не отдельный пункт меню.
 export const NAV_ITEMS: NavItem[] = [
-	{ href: "/dashboard", label: "Дашборд", icon: "📊" },
-	{ href: "/products", label: "Товары", icon: "📦" },
-	{ href: "/sales-kotopanda", label: "Касса Котопанда", icon: "💰" },
-	{ href: "/sales-elitka", label: "Касса Элитка", icon: "💰" },
-	{ href: "/clients", label: "Клиенты", icon: "👥" },
-	{ href: "/reports", label: "Отчёты", icon: "📈" },
-	{ href: "/bank", label: "Банк Приватбанк", icon: "🏦" },
-	{ href: "/card-universal", label: "Карточка Универсальная", icon: "💳" },
-	{ href: "/accounting/kotopanda", label: "Бухгалтерия Котопанда", icon: "🧮" },
-	{ href: "/accounting/elitka", label: "Бухгалтерия Элитка", icon: "🧮" },
-	{ href: "/offset", label: "Взаимозачёт", icon: "🔁" },
-	{ href: "/references/accounts", label: "Справочники", icon: "📚" },
-	{ href: "/settings", label: "Настройки", icon: "⚙️" },
+	{ href: "/dashboard", label: "Дашборд", icon: "📊", section: "dashboard" },
+	{ href: "/products", label: "Товары", icon: "📦", section: "products" },
+	{ href: "/sales-kotopanda", label: "Касса Котопанда", icon: "💰", section: "sales-kotopanda" },
+	{ href: "/sales-elitka", label: "Касса Элитка", icon: "💰", section: "sales-elitka" },
+	{ href: "/clients", label: "Клиенты", icon: "👥", section: "clients" },
+	{ href: "/reports", label: "Отчёты", icon: "📈", section: "reports" },
+	{ href: "/bank", label: "Банк Приватбанк", icon: "🏦", section: "bank" },
+	{ href: "/card-universal", label: "Карточка Универсальная", icon: "💳", section: "card" },
+	{ href: "/accounting/kotopanda", label: "Бухгалтерия Котопанда", icon: "🧮", section: "accounting-kotopanda" },
+	{ href: "/accounting/elitka", label: "Бухгалтерия Элитка", icon: "🧮", section: "accounting-elitka" },
+	{ href: "/offset", label: "Взаимозачёт", icon: "🔁", section: "offset" },
+	{ href: "/settings", label: "Настройки", icon: "⚙️", section: "settings" },
 ];
 
 const STYLES = `
@@ -59,6 +65,11 @@ const STYLES = `
 		flex-direction: column;
 		gap: 4px;
 	}
+	.sidebar-top {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+	}
 	.brand {
 		display: flex;
 		align-items: center;
@@ -68,6 +79,25 @@ const STYLES = `
 		padding: 8px 10px 20px;
 	}
 	.brand-emoji { font-size: 20px; }
+	.nav-toggle {
+		display: none;
+		align-items: center;
+		justify-content: center;
+		width: 34px;
+		height: 34px;
+		background: none;
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		font-size: 16px;
+		color: var(--text);
+		cursor: pointer;
+	}
+	.sidebar-nav {
+		display: flex;
+		flex-direction: column;
+		flex: 1;
+		gap: 4px;
+	}
 	.nav-item {
 		display: flex;
 		align-items: center;
@@ -83,6 +113,35 @@ const STYLES = `
 		color: var(--blue);
 	}
 	.nav-icon { font-size: 16px; width: 18px; text-align: center; }
+	.sidebar-user {
+		margin-top: auto;
+		padding: 12px 10px 4px;
+		border-top: 1px solid var(--border);
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+	}
+	.sidebar-username {
+		font-size: 12px;
+		color: var(--text-muted);
+		font-weight: 600;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.sidebar-user form { margin: 0; }
+	.sidebar-logout {
+		background: none;
+		border: none;
+		color: var(--text-muted);
+		font: inherit;
+		font-size: 12px;
+		cursor: pointer;
+		padding: 4px 6px;
+		border-radius: 6px;
+	}
+	.sidebar-logout:hover { background: var(--bg); color: var(--text); }
 	.main {
 		flex: 1;
 		padding: 24px 32px;
@@ -143,51 +202,64 @@ const STYLES = `
 		color: var(--text);
 		margin: 0 0 8px;
 	}
-	@keyframes moneyCopyFlash {
-		0% { background: #fde68a; }
-		100% { background: transparent; }
+	@media (max-width: 760px) {
+		/* Базовый шрифт у тела — 14px, рассчитан на десктопную плотность; на телефоне
+		   поднимаем до 16px, чтобы весь текст, который не переопределён отдельно
+		   (заголовки, подписи, обычные абзацы), не приходилось разглядывать. */
+		html, body { font-size: 16px; }
+		.app { flex-direction: column; }
+		.sidebar {
+			width: 100%;
+			border-right: none;
+			border-bottom: 1px solid var(--border);
+			padding: 8px 14px;
+		}
+		.brand { padding: 6px 0; font-size: 17px; }
+		.nav-toggle {
+			display: flex;
+			width: 40px;
+			height: 40px;
+			font-size: 18px;
+		}
+		.sidebar-nav {
+			display: none;
+			flex: none;
+			padding-top: 8px;
+			gap: 2px;
+		}
+		.sidebar.open .sidebar-nav { display: flex; }
+		.nav-item { padding: 13px 12px; font-size: 15px; }
+		.nav-icon { font-size: 18px; }
+		.sidebar-user { margin-top: 8px; padding: 14px 10px 6px; }
+		.sidebar-username { font-size: 13px; }
+		.sidebar-logout { font-size: 13px; padding: 7px 10px; }
+		.main { padding: 14px; }
+		.topbar { gap: 10px; }
+		.topbar h1 { font-size: 19px; }
+		.btn-primary {
+			font-size: 16px;
+			padding: 13px 18px;
+		}
+		.dropdown, .icon-btn {
+			font-size: 14px;
+			padding: 10px 12px;
+		}
 	}
-	.money-copy-flash {
-		animation: moneyCopyFlash 0.6s ease;
-		border-radius: 4px;
-	}
-	.copy-chip {
-		position: fixed;
-		right: 20px;
-		bottom: 20px;
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		background: #fde68a;
-		border: 1px solid #e8c34a;
-		border-radius: 12px;
-		padding: 10px 14px;
-		box-shadow: 0 8px 24px rgba(20, 24, 33, 0.18);
-		cursor: pointer;
-		font-size: 13px;
-		font-weight: 600;
-		color: #6b5410;
-		/* Ниже любого дропдауна/модалки (period-overlay:15, dropdown-menu:20, drawer:40/41,
-		   modal-overlay:50), чтобы плашка не перекрывала их и не воровала клики, если
-		   визуально оказалась в том же углу экрана. */
-		z-index: 5;
-		user-select: none;
-	}
-	.copy-chip:hover { background: #fcd34d; }
-	.copy-chip-close {
-		margin-left: 4px;
-		color: #8a6d1a;
-		font-weight: 700;
-		padding: 0 2px;
-	}
-	.copy-chip-close:hover { color: #4a3a0d; }
 `;
 
-export function renderPage(activeHref: string, title: string, content: string): string {
-	const navHtml = NAV_ITEMS.map((item) => {
-		const cls = item.href === activeHref ? "nav-item active" : "nav-item";
-		return `<a class="${cls}" href="${item.href}"><span class="nav-icon">${item.icon}</span>${item.label}</a>`;
-	}).join("\n");
+export function renderPage(activeHref: string, title: string, content: string, env: Env): string {
+	const auth = getAuthContext(env);
+	// auth отсутствует только если renderPage вызвали вне цепочки запроса, прошедшей проверку
+	// в index.ts (не должно происходить) — тогда безопаснее показать меню как есть, чем уронить
+	// страницу: сама проверка прав уже отработала на уровне маршрута.
+	const visibleItems = !auth ? NAV_ITEMS : NAV_ITEMS.filter((item) => auth.isAdmin || auth.allowedSections.has(item.section));
+
+	const navHtml = visibleItems
+		.map((item) => {
+			const cls = item.href === activeHref ? "nav-item active" : "nav-item";
+			return `<a class="${cls}" href="${item.href}"><span class="nav-icon">${item.icon}</span>${item.label}</a>`;
+		})
+		.join("\n");
 
 	return `<!doctype html>
 <html lang="ru">
@@ -205,18 +277,26 @@ export function renderPage(activeHref: string, title: string, content: string): 
 </head>
 <body>
 	<div class="app">
-		<aside class="sidebar">
-			<div class="brand"><span class="brand-emoji">🐾</span>Котопанда</div>
+		<aside class="sidebar" id="sidebar">
+			<div class="sidebar-top">
+				<div class="brand"><span class="brand-emoji">🐾</span>Котопанда</div>
+				<button type="button" class="nav-toggle" id="navToggle" aria-label="Меню">☰</button>
+			</div>
+			<div class="sidebar-nav" id="sidebarNav">
 			${navHtml}
+			${
+				auth
+					? `<div class="sidebar-user">
+				<span class="sidebar-username">${escapeHtml(auth.username)}</span>
+				<form method="post" action="/logout"><button type="submit" class="sidebar-logout">Выйти</button></form>
+			</div>`
+					: ""
+			}
+			</div>
 		</aside>
 		<main class="main">
 			${content}
 		</main>
-	</div>
-	<div class="copy-chip" id="copyChip" hidden>
-		<span>📋</span>
-		<span id="copyChipValue"></span>
-		<span class="copy-chip-close" id="copyChipClose" title="Убрать">✕</span>
 	</div>
 	<script>
 		if ("serviceWorker" in navigator) {
@@ -224,6 +304,16 @@ export function renderPage(activeHref: string, title: string, content: string): 
 				navigator.serviceWorker.register("/sw.js");
 			});
 		}
+		// Бургер-меню — на узких экранах сайдбар схлопнут в верхнюю панель, список пунктов
+		// открывается/закрывается по клику на ☰ (см. .nav-toggle/.sidebar-nav в STYLES).
+		(function () {
+			var toggle = document.getElementById("navToggle");
+			var sidebar = document.getElementById("sidebar");
+			if (!toggle || !sidebar) return;
+			toggle.addEventListener("click", function () {
+				sidebar.classList.toggle("open");
+			});
+		})();
 		// Защита от повторной отправки формы двойным кликом/Enter — любая форма на сайте
 		// шлёт запрос и уходит на новую страницу, повторная отправка того же элемента
 		// до перезагрузки — всегда случайность (например, "Терминал" задваивался в кассе).
@@ -240,104 +330,6 @@ export function renderPage(activeHref: string, title: string, content: string): 
 			},
 			true,
 		);
-
-		// Клик по любой сумме на странице копирует её в буфер обмена — без привязки к
-		// конкретным классам/страницам, по формату текста ("1 234,56", "Д 1 234,56",
-		// "1 234,56 грн" и т.п.), чтобы работало сразу везде, где показываются деньги.
-		// Жёлтая плашка внизу справа хранит последнее скопированное и по клику подставляет
-		// его в последнее сфокусированное поле — так можно скопировать сумму на одной
-		// странице (например, в Обороте) и вставить на другой (например, в кассе).
-		(function () {
-			var STORAGE_KEY = "kotopanda:lastCopiedAmount";
-			var MONEY_RE = /^(?:[ДК]\s)?([+-]?[\d\s ]+,\d{2})(?:\s?грн\.?)?$/;
-			var lastFocusedInput = null;
-			var chip = document.getElementById("copyChip");
-			var chipValue = document.getElementById("copyChipValue");
-			var chipClose = document.getElementById("copyChipClose");
-
-			function normalize(raw) {
-				var s = raw.trim();
-				if (s.charAt(0) === "+" || s.charAt(0) === "-") s = s.slice(1);
-				return s.replace(/[\s ]/g, "").replace(",", ".");
-			}
-
-			function display(normalized) {
-				var parts = normalized.split(".");
-				return parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, " ") + "," + parts[1];
-			}
-
-			function showChip(normalized) {
-				if (!chip) return;
-				chipValue.textContent = display(normalized);
-				chip.hidden = false;
-			}
-
-			function hideChip() {
-				if (!chip) return;
-				chip.hidden = true;
-				try {
-					localStorage.removeItem(STORAGE_KEY);
-				} catch (e) {}
-			}
-
-			try {
-				var stored = localStorage.getItem(STORAGE_KEY);
-				if (stored) showChip(stored);
-			} catch (e) {}
-
-			document.addEventListener("focusin", function (e) {
-				var el = e.target;
-				if (el instanceof HTMLInputElement && (el.type === "number" || el.type === "text")) {
-					lastFocusedInput = el;
-				}
-			});
-
-			document.addEventListener(
-				"click",
-				function (e) {
-					var el = e.target;
-					if (!(el instanceof Element) || el.children.length > 0) return;
-					var text = (el.textContent || "").trim();
-					var match = text.match(MONEY_RE);
-					if (!match) return;
-					var normalized = normalize(match[1]);
-					try {
-						if (navigator.clipboard && navigator.clipboard.writeText) {
-							navigator.clipboard.writeText(normalized);
-						}
-					} catch (err) {}
-					try {
-						localStorage.setItem(STORAGE_KEY, normalized);
-					} catch (err) {}
-					showChip(normalized);
-					el.classList.remove("money-copy-flash");
-					void el.offsetWidth;
-					el.classList.add("money-copy-flash");
-				},
-				true,
-			);
-
-			if (chip) {
-				chip.addEventListener("click", function (e) {
-					if (e.target === chipClose) return;
-					var normalized = null;
-					try {
-						normalized = localStorage.getItem(STORAGE_KEY);
-					} catch (err) {}
-					if (!normalized || !lastFocusedInput || !document.contains(lastFocusedInput)) return;
-					lastFocusedInput.value = normalized;
-					lastFocusedInput.dispatchEvent(new Event("input", { bubbles: true }));
-					lastFocusedInput.dispatchEvent(new Event("change", { bubbles: true }));
-					lastFocusedInput.focus();
-				});
-			}
-			if (chipClose) {
-				chipClose.addEventListener("click", function (e) {
-					e.stopPropagation();
-					hideChip();
-				});
-			}
-		})();
 	</script>
 </body>
 </html>`;

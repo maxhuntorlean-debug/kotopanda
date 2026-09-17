@@ -10,6 +10,7 @@ import {
 	quarterLabel,
 	encodeRangeToken,
 	periodTokenLabel,
+	shiftPeriodToken,
 } from "./format";
 
 // Единые иконки редактирования/удаления вместо emoji (✏/🗑) — рендер эмодзи-глифов
@@ -48,6 +49,9 @@ export const SUB_TABS_STYLES = `
 	.sub-tab.active {
 		color: var(--blue);
 		border-bottom-color: var(--blue);
+	}
+	@media (max-width: 760px) {
+		.sub-tab { padding: 12px 16px; font-size: 15px; }
 	}
 `;
 
@@ -182,6 +186,20 @@ export const DRAWER_STYLES = `
 	.drawer-checkbox input[type="checkbox"]:disabled {
 		cursor: not-allowed;
 	}
+	@media (max-width: 760px) {
+		/* Инпут мельче 16px заставляет iOS Safari зумить страницу при фокусе — на десктопе
+		   не трогаем (там это просто плотность), только на мобильном. */
+		.drawer select,
+		.drawer input[type="text"],
+		.drawer input[type="date"],
+		.drawer input[type="number"] {
+			font-size: 16px;
+			padding: 11px 12px;
+		}
+		.drawer-label { font-size: 13px; }
+		.drawer-hint { font-size: 12px; }
+		.drawer-checkbox { font-size: 14px; }
+	}
 `;
 
 export type SimpleDrawerOptions = {
@@ -292,6 +310,22 @@ export const MODAL_STYLES = `
 		cursor: pointer;
 		padding: 10px 16px;
 	}
+	@media (max-width: 760px) {
+		/* MODAL_STYLES подключается последним на каждой странице — эта медиа-правка
+		   перекрывает локальные ".modal-card input{font-size:13px}" того же селектора у
+		   каждой страницы с модалками (cashTest.ts, bank.ts и т.д.), а не дублируется в них. */
+		.modal-card input[type="text"],
+		.modal-card input[type="number"],
+		.modal-card input[type="date"],
+		.modal-card select {
+			font-size: 16px;
+			padding: 11px 12px;
+		}
+		.modal-card { width: 92vw; padding: 20px; }
+		.modal-card h3 { font-size: 17px; }
+		.modal-card p { font-size: 14px; }
+		.btn-danger { font-size: 15px; padding: 12px 18px; }
+	}
 `;
 
 export type ConfirmModalOptions = {
@@ -341,15 +375,27 @@ export function renderConfirmModal(opts: ConfirmModalOptions): string {
 			cancelBtn.addEventListener("click", function () {
 				overlay.classList.remove("open");
 			});
-			overlay.addEventListener("click", function (e) {
-				if (e.target === overlay) overlay.classList.remove("open");
-			});
 		})();
 	</script>
 	`;
 }
 
 export const PERIOD_PICKER_STYLES = `
+	.period-nav {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+	}
+	.period-step {
+		cursor: pointer;
+		user-select: none;
+		font-size: 11px;
+		line-height: 1;
+		padding: 8px 8px;
+	}
+	.period-step:hover {
+		background: var(--bg);
+	}
 	.date-dropdown {
 		position: relative;
 	}
@@ -473,6 +519,15 @@ export const PERIOD_PICKER_STYLES = `
 		inset: 0;
 		z-index: 15;
 	}
+	@media (max-width: 760px) {
+		.period-step { font-size: 13px; padding: 10px 10px; }
+		.menu-item { font-size: 15px; padding: 11px 12px; }
+		.menu-check { width: 18px; }
+		.menu-item .arrow { font-size: 15px; }
+		.dropdown-menu { min-width: 250px; padding: 8px; }
+		.custom-period-form label { font-size: 13px; }
+		.custom-period-form input[type="date"] { font-size: 16px; padding: 10px; }
+	}
 `;
 
 // Выезжающий выбор периода (Текущий месяц / Прошлый месяц / Месяц / Квартал / Год / Период),
@@ -535,7 +590,15 @@ export function renderPeriodPicker(basePath: string, period: string, from: strin
 		return rangeItem(encodeRangeToken(r.from, r.to), String(y));
 	}).join("\n");
 
+	// ▼/▲ рядом с окошком периода — шаг на соседний период (см. shiftPeriodToken в format.ts):
+	// целый месяц/квартал/год, если текущий диапазон выровнен по его границе, иначе на длину
+	// самого диапазона. Обычные ссылки с ?period=..., без JS — как и пункты меню выше.
+	const prevHref = `${basePath}${sep}period=${encodeURIComponent(shiftPeriodToken(period, -1))}`;
+	const nextHref = `${basePath}${sep}period=${encodeURIComponent(shiftPeriodToken(period, 1))}`;
+
 	return `
+	<div class="period-nav">
+	<a class="icon-btn period-step" href="${prevHref}" title="Предыдущий период">▼</a>
 	<div class="date-dropdown" id="dateDropdown">
 		<button type="button" class="dropdown" id="dateDropdownTrigger">📅 ${escapeHtml(periodLabel)} <span class="chevron">▾</span></button>
 		<div class="dropdown-menu" id="periodPanelMain">
@@ -568,6 +631,8 @@ export function renderPeriodPicker(basePath: string, period: string, from: strin
 		</div>
 	</div>
 	<div class="period-overlay" id="periodOverlay"></div>
+	<a class="icon-btn period-step" href="${nextHref}" title="Следующий период">▲</a>
+	</div>
 	<script>
 		(function () {
 			var wrap = document.getElementById("dateDropdown");

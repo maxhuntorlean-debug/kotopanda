@@ -1,7 +1,8 @@
 import { renderPage } from "../layout";
-import { escapeHtml, formatMoney, isoToDisplay, todayIso, addDaysIso, periodRangeFromToken, resolvePeriodToken } from "../format";
+import { escapeHtml, formatMoney, isoToDisplay, addDaysIso, periodRangeFromToken, resolvePeriodToken } from "../format";
 import { PERIOD_PICKER_STYLES, renderPeriodPicker, DRAWER_STYLES, SUB_TABS_STYLES, renderSubTabs, type SubTab, MODAL_STYLES } from "../ui";
-import { CHART_OF_ACCOUNTS, listOwnAccounts, listCashBoxes, listExpenseItems, listEmployees, listOtherOperations, type ReferenceKind } from "../accounting";
+import { CHART_OF_ACCOUNTS } from "../accounting";
+import { listTestRefItems, type TestRefKind } from "../referencesTest";
 
 export const BANK_TABS: SubTab[] = [
 	{ href: "/bank", label: "Выписка" },
@@ -34,14 +35,19 @@ const STYLES = `
 	.stats-row {
 		display: grid;
 		grid-template-columns: repeat(4, 1fr);
-		gap: 16px;
-		margin-bottom: 20px;
+		gap: 8px;
+		margin-bottom: 12px;
 	}
 	.stat-card {
 		background: var(--panel);
 		border: 1px solid var(--border);
-		border-radius: var(--radius);
-		padding: 18px 18px 16px;
+		border-radius: 10px;
+		padding: 8px 12px;
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: 10px;
+		min-width: 0;
 	}
 	.stat-card.highlight {
 		background: var(--blue-soft);
@@ -49,15 +55,24 @@ const STYLES = `
 	}
 	.stat-label {
 		color: var(--text-muted);
-		font-size: 13px;
-		margin-bottom: 10px;
+		font-size: 12px;
+		margin: 0;
+		white-space: nowrap;
 	}
 	.stat-value {
-		font-size: 22px;
+		font-size: 15px;
 		font-weight: 700;
+		white-space: nowrap;
+		margin-left: auto;
 	}
 	.stat-value.positive { color: var(--green); }
 	.stat-value.negative { color: var(--red); }
+	@media (max-width: 1100px) {
+		.stats-row { grid-template-columns: 1fr 1fr; }
+	}
+	@media (max-width: 560px) {
+		.stats-row { grid-template-columns: 1fr; }
+	}
 
 	.table-card {
 		background: var(--panel);
@@ -373,7 +388,7 @@ function renderDrawer(period: string, accountSubcontoMap: Record<string, string[
 				if (!subcontoSelect.hidden) {
 					subcontoSelect.value = row.dataset.subconto || "";
 				} else {
-					subcontoText.value = row.dataset.subconto || "";
+					subcontoText.value = row.dataset.subconto || row.dataset.rawName || "";
 				}
 				setupRuleCheckbox(row);
 				overlay.classList.add("open");
@@ -391,9 +406,6 @@ function renderDrawer(period: string, accountSubcontoMap: Record<string, string[
 
 			accountSelect.addEventListener("change", syncSubconto);
 			closeBtn.addEventListener("click", closeDrawer);
-			overlay.addEventListener("click", function (e) {
-				if (e.target === overlay) closeDrawer();
-			});
 		})();
 	</script>
 	`;
@@ -411,14 +423,9 @@ export async function renderBankPage(env: Env, url: URL): Promise<string> {
 			"/bank",
 			"Банк",
 			`<div class="topbar"><h1>Банк</h1></div><div class="table-card"><div class="empty-state">Счёт не найден в базе. Сначала нужно загрузить выписку.</div></div>`,
+			env,
 		);
 	}
-
-	const lastData = await env.DB.prepare(`SELECT MAX(operation_date) AS max_date FROM bank_transactions WHERE account_id = ?`)
-		.bind(account.id)
-		.first<{ max_date: string | null }>();
-	const lastDataDate = lastData?.max_date ?? null;
-	const today = todayIso();
 
 	const { from: periodFrom, to: periodTo } = periodRangeFromToken(period);
 
@@ -431,24 +438,14 @@ export async function renderBankPage(env: Env, url: URL): Promise<string> {
 		.bind(account.id, periodFrom, periodTo)
 		.all<TxRow>();
 
-	// Субконто-подсказки зависят от выбранного счёта — те же справочники, что и в ручных проводках.
-	const ownAccounts = await listOwnAccounts(env);
-	const cashBoxes = await listCashBoxes(env);
-	const expenseItems = await listExpenseItems(env);
-	const employeeItems = await listEmployees(env);
-	const otherOperationItems = await listOtherOperations(env);
-	const { results: suppliers } = await env.DB.prepare(`SELECT name FROM counterparties WHERE is_supplier = 1 ORDER BY name`).all<{ name: string }>();
-	const refLists: Record<ReferenceKind, string[]> = {
-		accounts: ownAccounts.map((a) => a.name),
-		cashBoxes: cashBoxes.map((c) => c.name),
-		suppliers: suppliers.map((s) => s.name),
-		expenses: expenseItems.map((e) => e.name),
-		employees: employeeItems.map((e) => e.name),
-		otherOperations: otherOperationItems.map((o) => o.name),
-	};
+	// Субконто-подсказки зависят от выбранного счёта — те же тестовые справочники, что и в
+	// ручных проводках Бухгалтерии (Настройки → Справочники).
+	const neededKinds = Array.from(new Set(CHART_OF_ACCOUNTS.map((a) => a.refKind).filter((k): k is TestRefKind => k !== null)));
+	const refListEntries = await Promise.all(neededKinds.map(async (kind) => [kind, (await listTestRefItems(env, kind)).map((i) => i.name)] as const));
+	const refLists = Object.fromEntries(refListEntries) as Record<TestRefKind, string[]>;
 	const accountSubcontoMap: Record<string, string[]> = {};
 	for (const acc of CHART_OF_ACCOUNTS) {
-		if (acc.refKind) accountSubcontoMap[acc.code] = refLists[acc.refKind];
+		if (acc.refKind) accountSubcontoMap[acc.code] = refLists[acc.refKind] ?? [];
 	}
 
 	const totals = await env.DB.prepare(
@@ -472,12 +469,6 @@ export async function renderBankPage(env: Env, url: URL): Promise<string> {
 		: `<tr><td colspan="6" class="empty-state">За этот период операций нет</td></tr>`;
 
 	let banner = "";
-	if (lastDataDate && lastDataDate < today) {
-		banner += `<div class="banner warning">
-			<span>⚠ Данные в базе актуальны на ${isoToDisplay(lastDataDate)}, сегодня ${isoToDisplay(today)} — рекомендуем загрузить свежую выписку.</span>
-			<form method="post" action="/bank/sync"><input type="hidden" name="period" value="${period}" /><button type="submit" class="btn-primary">Завантажити</button></form>
-		</div>`;
-	}
 
 	const syncError = url.searchParams.get("sync_error");
 	const synced = url.searchParams.get("synced");
@@ -517,7 +508,7 @@ export async function renderBankPage(env: Env, url: URL): Promise<string> {
 			</form>
 			<form method="post" action="/bank/sync">
 				<input type="hidden" name="period" value="${period}" />
-				<button type="submit" class="btn-primary">⬇ Получить из банку</button>
+				<button type="submit" class="btn-primary">⬇ Получить из банка</button>
 			</form>
 		</div>
 	</div>
@@ -563,6 +554,6 @@ export async function renderBankPage(env: Env, url: URL): Promise<string> {
 	${renderDrawer(period, accountSubcontoMap)}
 	`;
 
-	return renderPage("/bank", "Банк", content);
+	return renderPage("/bank", "Банк", content, env);
 }
 

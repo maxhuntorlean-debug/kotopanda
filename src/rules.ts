@@ -1,20 +1,24 @@
+import { syncBankPosting } from "./bankPostingTest";
+
 type PostingRule = {
 	match_field: "counterparty_account" | "counterparty_name";
 	match_value: string;
 	posting_account: string;
 	posting_subconto: string | null;
 	auto_status: "done" | "review";
+	firm_id: number | null;
 };
 
 export type RuleMatch = {
 	posting_account: string;
 	posting_subconto: string | null;
 	status: "done" | "review";
+	firm_id: number | null;
 };
 
 async function loadRules(db: D1Database): Promise<PostingRule[]> {
 	const { results } = await db
-		.prepare(`SELECT match_field, match_value, posting_account, posting_subconto, auto_status FROM posting_rules ORDER BY priority DESC, id ASC`)
+		.prepare(`SELECT match_field, match_value, posting_account, posting_subconto, auto_status, firm_id FROM posting_rules ORDER BY priority DESC, id ASC`)
 		.all<PostingRule>();
 	return results;
 }
@@ -23,7 +27,7 @@ function matchAgainst(rules: PostingRule[], counterpartyAccount: string | null, 
 	for (const rule of rules) {
 		const value = rule.match_field === "counterparty_account" ? counterpartyAccount : counterpartyName;
 		if (value && value === rule.match_value) {
-			return { posting_account: rule.posting_account, posting_subconto: rule.posting_subconto, status: rule.auto_status };
+			return { posting_account: rule.posting_account, posting_subconto: rule.posting_subconto, status: rule.auto_status, firm_id: rule.firm_id };
 		}
 	}
 	return null;
@@ -38,34 +42,41 @@ export async function createRuleMatcher(db: D1Database): Promise<(counterpartyAc
 
 // Задним числом применяет правила к уже загруженным операциям без разноски.
 // Не трогает операции, которые уже размечены (вручную или предыдущим прогоном правил).
+// Каждое совпадение сразу же проводится в test_journal через syncBankPosting (та же связка, что
+// и ручное сохранение в drawer, см. transactions.ts) — поэтому здесь не единый batch, а
+// последовательные запросы по каждой операции.
 export async function applyRulesToExisting(env: Env): Promise<number> {
 	const matcher = await createRuleMatcher(env.DB);
 
 	const { results: candidates } = await env.DB.prepare(
-		`SELECT id, counterparty_account, counterparty_name FROM bank_transactions WHERE posting_account IS NULL`,
-	).all<{ id: number; counterparty_account: string | null; counterparty_name: string | null }>();
+		`SELECT id, operation_date, direction, amount, counterparty_account, counterparty_name FROM bank_transactions WHERE posting_account IS NULL`,
+	).all<{
+		id: number;
+		operation_date: string;
+		direction: "in" | "out";
+		amount: number;
+		counterparty_account: string | null;
+		counterparty_name: string | null;
+	}>();
 
-	if (candidates.length === 0) return 0;
-
-	const statements = [];
+	let applied = 0;
 	for (const tx of candidates) {
 		const match = matcher(tx.counterparty_account, tx.counterparty_name);
-		if (match) {
-			statements.push(
-				env.DB.prepare(`UPDATE bank_transactions SET posting_account = ?, posting_subconto = ?, status = ? WHERE id = ?`).bind(
-					match.posting_account,
-					match.posting_subconto,
-					match.status,
-					tx.id,
-				),
-			);
-		}
+		if (!match) continue;
+
+		await syncBankPosting(
+			env,
+			tx.id,
+			{ operationDate: tx.operation_date, direction: tx.direction, amount: tx.amount, counterpartyName: tx.counterparty_name, journalDocumentId: null },
+			match.posting_account,
+			match.posting_subconto,
+			match.firm_id,
+		);
+		await env.DB.prepare(`UPDATE bank_transactions SET status = ? WHERE id = ?`).bind(match.status, tx.id).run();
+		applied++;
 	}
 
-	if (statements.length === 0) return 0;
-
-	const results = await env.DB.batch(statements);
-	return results.reduce((sum, r) => sum + (r.meta.changes ?? 0), 0);
+	return applied;
 }
 
 export type RuleDisplay = {
@@ -92,6 +103,7 @@ export type NewRuleInput = {
 	postingSubconto: string | null;
 	autoStatus: "done" | "review";
 	priority: number;
+	firmId: number | null;
 };
 
 // Не создаёт дубль, если правило с таким же условием (тип + значение) уже есть —
@@ -103,9 +115,9 @@ export async function createRule(env: Env, input: NewRuleInput): Promise<void> {
 	if (existing) return;
 
 	await env.DB.prepare(
-		`INSERT INTO posting_rules (match_field, match_value, posting_account, posting_subconto, auto_status, priority) VALUES (?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO posting_rules (match_field, match_value, posting_account, posting_subconto, auto_status, priority, firm_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 	)
-		.bind(input.matchField, input.matchValue, input.postingAccount, input.postingSubconto, input.autoStatus, input.priority)
+		.bind(input.matchField, input.matchValue, input.postingAccount, input.postingSubconto, input.autoStatus, input.priority, input.firmId)
 		.run();
 }
 

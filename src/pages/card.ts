@@ -1,42 +1,32 @@
 import { renderPage } from "../layout";
 import { escapeHtml, formatMoney, isoToDisplay, todayIso, addDaysIso, periodRangeFromToken, resolvePeriodToken } from "../format";
-import { PERIOD_PICKER_STYLES, renderPeriodPicker, DRAWER_STYLES, SUB_TABS_STYLES, renderSubTabs, type SubTab, MODAL_STYLES, renderConfirmModal, renderSimpleDrawer, editIconSvg, deleteIconSvg } from "../ui";
-import { getAccount, listTransactions, balanceBefore, balanceAtEndOf, listPostingCategories, CARD_ACCOUNT, type CardTxRow, type PostingCategoryRow } from "../card";
-import { CHART_OF_ACCOUNTS, listOwnAccounts, listCashBoxes, listExpenseItems, listEmployees, listOtherOperations, type ReferenceKind } from "../accounting";
+import { PERIOD_PICKER_STYLES, renderPeriodPicker, DRAWER_STYLES, SUB_TABS_STYLES, renderSubTabs, type SubTab, MODAL_STYLES, renderConfirmModal, editIconSvg, deleteIconSvg } from "../ui";
+import { getAccount, listTransactions, balanceBefore, balanceAtEndOf, listPostingCategories, type CardTxRow, type PostingCategoryRow } from "../card";
+import { CHART_OF_ACCOUNTS, type ChartAccount } from "../accounting";
+import { listTestRefItems, type TestRefKind } from "../referencesTest";
 
 export const CARD_TABS: SubTab[] = [
 	{ href: "/card-universal", label: "Операции" },
 	{ href: "/card-universal/categories", label: "Правила разноски" },
 ];
 
-// Категория "нуждается" в субконто на операции, если её сторона-контрагент (не "31") оставлена
-// без фиксированного субконто, но её счёт всё же привязан к какому-то справочнику — тогда
-// конкретное значение (например, поставщик) вводится каждый раз заново, на самой операции.
-function subcontoNeedOf(c: PostingCategoryRow, refLists: Record<ReferenceKind, string[]>): string[] | null {
-	const sides = [
-		{ account: c.credit_account, subconto: c.credit_subconto },
-		{ account: c.debit_account, subconto: c.debit_subconto },
-	];
-	for (const side of sides) {
-		if (side.account === CARD_ACCOUNT || side.subconto !== null) continue;
-		const acc = CHART_OF_ACCOUNTS.find((a) => a.code === side.account);
-		if (acc?.refKind) return refLists[acc.refKind];
-	}
-	return null;
-}
-
 const STYLES = `
 	.stats-row {
 		display: grid;
 		grid-template-columns: repeat(4, 1fr);
-		gap: 16px;
-		margin-bottom: 20px;
+		gap: 8px;
+		margin-bottom: 12px;
 	}
 	.stat-card {
 		background: var(--panel);
 		border: 1px solid var(--border);
-		border-radius: var(--radius);
-		padding: 18px 18px 16px;
+		border-radius: 10px;
+		padding: 8px 12px;
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: 10px;
+		min-width: 0;
 	}
 	.stat-card.highlight {
 		background: var(--blue-soft);
@@ -44,15 +34,24 @@ const STYLES = `
 	}
 	.stat-label {
 		color: var(--text-muted);
-		font-size: 13px;
-		margin-bottom: 10px;
+		font-size: 12px;
+		margin: 0;
+		white-space: nowrap;
 	}
 	.stat-value {
-		font-size: 22px;
+		font-size: 15px;
 		font-weight: 700;
+		white-space: nowrap;
+		margin-left: auto;
 	}
 	.stat-value.positive { color: var(--green); }
 	.stat-value.negative { color: var(--red); }
+	@media (max-width: 1100px) {
+		.stats-row { grid-template-columns: 1fr 1fr; }
+	}
+	@media (max-width: 560px) {
+		.stats-row { grid-template-columns: 1fr; }
+	}
 
 	.table-card {
 		background: var(--panel);
@@ -237,9 +236,8 @@ function renderRow(tx: CardTxRow): string {
 		</tr>`;
 }
 
-function renderDrawer(period: string, categories: PostingCategoryRow[], categorySubconto: Record<number, string[]>): string {
+function renderDrawer(period: string, categories: PostingCategoryRow[]): string {
 	const categoryOptionsHtml = categories.map((c) => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join("\n");
-	const categorySubcontoJson = JSON.stringify(categorySubconto);
 
 	return `
 	<div class="modal-overlay" id="drawerOverlay">
@@ -272,11 +270,9 @@ function renderDrawer(period: string, categories: PostingCategoryRow[], category
 							${categoryOptionsHtml}
 						</select>
 					</div>
-					<div class="drawer-field" id="drawerSubcontoField" hidden>
+					<div class="drawer-field">
 						<span class="drawer-label">Субконто</span>
-						<select name="subconto" id="drawerSubconto">
-							<option value="">Не выбрано</option>
-						</select>
+						<input type="text" name="subconto" id="drawerSubconto" placeholder="необязательно" />
 					</div>
 					<div class="drawer-actions">
 						<button type="submit" class="btn-primary">Сохранить</button>
@@ -289,28 +285,6 @@ function renderDrawer(period: string, categories: PostingCategoryRow[], category
 		(function () {
 			var overlay = document.getElementById("drawerOverlay");
 			var closeBtn = document.getElementById("drawerClose");
-			var postingSelect = document.getElementById("drawerPosting");
-			var subcontoField = document.getElementById("drawerSubcontoField");
-			var subcontoSelect = document.getElementById("drawerSubconto");
-			var categorySubconto = ${categorySubcontoJson};
-
-			function syncSubcontoField(preselect) {
-				var names = postingSelect.value ? categorySubconto[postingSelect.value] : null;
-				if (names) {
-					subcontoSelect.innerHTML = '<option value="">Не выбрано</option>';
-					names.forEach(function (name) {
-						var opt = document.createElement("option");
-						opt.value = name;
-						opt.textContent = name;
-						subcontoSelect.appendChild(opt);
-					});
-					if (preselect) subcontoSelect.value = preselect;
-					subcontoField.hidden = false;
-				} else {
-					subcontoField.hidden = true;
-					subcontoSelect.value = "";
-				}
-			}
 
 			function openDrawer(row) {
 				document.getElementById("drawerTxId").value = row.dataset.txId;
@@ -318,7 +292,7 @@ function renderDrawer(period: string, categories: PostingCategoryRow[], category
 				document.getElementById("drawerPurpose").textContent = row.dataset.purpose;
 				document.getElementById("drawerAmount").textContent = row.dataset.amount;
 				document.getElementById("drawerPosting").value = row.dataset.postingId || "";
-				syncSubcontoField(row.dataset.subconto || "");
+				document.getElementById("drawerSubconto").value = row.dataset.subconto || "";
 				overlay.classList.add("open");
 			}
 
@@ -332,13 +306,7 @@ function renderDrawer(period: string, categories: PostingCategoryRow[], category
 				});
 			});
 
-			postingSelect.addEventListener("change", function () {
-				syncSubcontoField();
-			});
 			closeBtn.addEventListener("click", closeDrawer);
-			overlay.addEventListener("click", function (e) {
-				if (e.target === overlay) closeDrawer();
-			});
 
 			// Сохранение разноски — обычный POST с редиректом на ту же страницу, после которого
 			// браузер прокручивает наверх. Запоминаем позицию перед сабмитом и восстанавливаем
@@ -379,32 +347,12 @@ export async function renderCardPage(env: Env, url: URL): Promise<string> {
 				</form>
 			</div>
 		</div>`;
-		return renderPage("/card-universal", "Карточка Универсальная", `<style>${STYLES}${SUB_TABS_STYLES}</style>${content}`);
+		return renderPage("/card-universal", "Карточка Универсальная", `<style>${STYLES}${SUB_TABS_STYLES}</style>${content}`, env);
 	}
 
 	const { from: periodFrom, to: periodTo } = periodRangeFromToken(period);
 	const transactions = await listTransactions(env, account.id, periodFrom, periodTo);
 	const categories = await listPostingCategories(env);
-	const ownAccounts = await listOwnAccounts(env);
-	const cashBoxes = await listCashBoxes(env);
-	const expenseItems = await listExpenseItems(env);
-	const employeeItems = await listEmployees(env);
-	const otherOperationItems = await listOtherOperations(env);
-	const { results: suppliers } = await env.DB.prepare(`SELECT name FROM counterparties WHERE is_supplier = 1 ORDER BY name`).all<{ name: string }>();
-
-	const refLists: Record<ReferenceKind, string[]> = {
-		accounts: ownAccounts.map((a) => a.name),
-		cashBoxes: cashBoxes.map((c) => c.name),
-		suppliers: suppliers.map((s) => s.name),
-		expenses: expenseItems.map((e) => e.name),
-		employees: employeeItems.map((e) => e.name),
-		otherOperations: otherOperationItems.map((o) => o.name),
-	};
-	const categorySubcontoOptions: Record<number, string[]> = {};
-	for (const c of categories) {
-		const need = subcontoNeedOf(c, refLists);
-		if (need) categorySubcontoOptions[c.id] = need;
-	}
 
 	const totalIn = transactions.filter((t) => t.direction === "in").reduce((sum, t) => sum + t.amount, 0);
 	const totalOut = transactions.filter((t) => t.direction === "out").reduce((sum, t) => sum + t.amount, 0);
@@ -480,10 +428,10 @@ export async function renderCardPage(env: Env, url: URL): Promise<string> {
 		</table>
 	</div>
 
-	${renderDrawer(period, categories, categorySubcontoOptions)}
+	${renderDrawer(period, categories)}
 	`;
 
-	return renderPage("/card-universal", "Карточка Универсальная", content);
+	return renderPage("/card-universal", "Карточка Универсальная", content, env);
 }
 
 function categoryAccLabel(code: string): string {
@@ -503,6 +451,10 @@ type CategoryPrefill = {
 	creditSubconto: string | null;
 };
 
+// Субконто Дт/Кт — каскадный выбор из тестового справочника, привязанного к выбранному счёту
+// (та же связка, что у Банка и Кассы: accountSubcontoMap строится из CHART_OF_ACCOUNTS.refKind +
+// listTestRefItems, см. bank.ts/cashTest.ts). Раньше поля были свободным текстом безо всякой
+// привязки к счёту — см. обсуждение "не привязываються субконто к счету".
 function categoryFieldsHtml(idPrefix: string, prefill?: CategoryPrefill): string {
 	return `
 		<div class="drawer-field">
@@ -512,7 +464,7 @@ function categoryFieldsHtml(idPrefix: string, prefill?: CategoryPrefill): string
 		<div class="journal-form-grid">
 			<div class="drawer-field">
 				<span class="drawer-label">Счёт Дт</span>
-				<select name="debit_account" id="${idPrefix}DebitAccountSelect" required>
+				<select name="debit_account" id="${idPrefix}DebitAccount" required>
 					<option value="">Выберите счёт</option>
 					${categoryAccountOptionsHtml(prefill?.debitAccount)}
 				</select>
@@ -526,7 +478,7 @@ function categoryFieldsHtml(idPrefix: string, prefill?: CategoryPrefill): string
 			</div>
 			<div class="drawer-field">
 				<span class="drawer-label">Счёт Кт</span>
-				<select name="credit_account" id="${idPrefix}CreditAccountSelect" required>
+				<select name="credit_account" id="${idPrefix}CreditAccount" required>
 					<option value="">Выберите счёт</option>
 					${categoryAccountOptionsHtml(prefill?.creditAccount)}
 				</select>
@@ -542,16 +494,16 @@ function categoryFieldsHtml(idPrefix: string, prefill?: CategoryPrefill): string
 	`;
 }
 
-function bindCategoryAccountSubcontoScript(idPrefix: string, accountSubcontoMap: Record<string, string[]>, initialDebitSubconto: string | null, initialCreditSubconto: string | null): string {
+function categorySubcontoBindScript(idPrefix: string, accountSubcontoMap: Record<string, string[]>, prefill?: CategoryPrefill): string {
 	return `
 		<script>
 			(function () {
 				var accountSubconto = ${JSON.stringify(accountSubcontoMap)};
 
-				function bind(accountId, subcontoSelectId, subcontoTextId, initial) {
+				function bind(accountId, selectId, textId, initial) {
 					var accountSelect = document.getElementById(accountId);
-					var subcontoSelect = document.getElementById(subcontoSelectId);
-					var subcontoText = document.getElementById(subcontoTextId);
+					var subcontoSelect = document.getElementById(selectId);
+					var subcontoText = document.getElementById(textId);
 
 					function sync(preselect) {
 						var names = accountSubconto[accountSelect.value];
@@ -563,7 +515,7 @@ function bindCategoryAccountSubcontoScript(idPrefix: string, accountSubcontoMap:
 								opt.textContent = name;
 								subcontoSelect.appendChild(opt);
 							});
-							if (preselect) subcontoSelect.value = preselect;
+							if (preselect && names.indexOf(preselect) !== -1) subcontoSelect.value = preselect;
 							subcontoSelect.hidden = false;
 							subcontoSelect.disabled = false;
 							subcontoText.hidden = true;
@@ -582,8 +534,8 @@ function bindCategoryAccountSubcontoScript(idPrefix: string, accountSubcontoMap:
 					sync(initial);
 				}
 
-				bind("${idPrefix}DebitAccountSelect", "${idPrefix}DebitSubcontoSelect", "${idPrefix}DebitSubcontoText", ${JSON.stringify(initialDebitSubconto)});
-				bind("${idPrefix}CreditAccountSelect", "${idPrefix}CreditSubcontoSelect", "${idPrefix}CreditSubcontoText", ${JSON.stringify(initialCreditSubconto)});
+				bind("${idPrefix}DebitAccount", "${idPrefix}DebitSubcontoSelect", "${idPrefix}DebitSubcontoText", ${JSON.stringify(prefill?.debitSubconto ?? null)});
+				bind("${idPrefix}CreditAccount", "${idPrefix}CreditSubcontoSelect", "${idPrefix}CreditSubcontoText", ${JSON.stringify(prefill?.creditSubconto ?? null)});
 			})();
 		</script>
 	`;
@@ -592,24 +544,13 @@ function bindCategoryAccountSubcontoScript(idPrefix: string, accountSubcontoMap:
 export async function renderCardCategoriesPage(env: Env, url: URL): Promise<string> {
 	const deleteError = url.searchParams.get("delete_error");
 	const categories = await listPostingCategories(env);
-	const ownAccounts = await listOwnAccounts(env);
-	const cashBoxes = await listCashBoxes(env);
-	const expenseItems = await listExpenseItems(env);
-	const employeeItems = await listEmployees(env);
-	const otherOperationItems = await listOtherOperations(env);
-	const { results: suppliers } = await env.DB.prepare(`SELECT name FROM counterparties WHERE is_supplier = 1 ORDER BY name`).all<{ name: string }>();
 
-	const refLists: Record<ReferenceKind, string[]> = {
-		accounts: ownAccounts.map((a) => a.name),
-		cashBoxes: cashBoxes.map((c) => c.name),
-		suppliers: suppliers.map((s) => s.name),
-		expenses: expenseItems.map((e) => e.name),
-		employees: employeeItems.map((e) => e.name),
-		otherOperations: otherOperationItems.map((o) => o.name),
-	};
+	const neededKinds = Array.from(new Set(CHART_OF_ACCOUNTS.map((a: ChartAccount) => a.refKind).filter((k): k is TestRefKind => k !== null)));
+	const refListEntries = await Promise.all(neededKinds.map(async (kind) => [kind, (await listTestRefItems(env, kind)).map((i) => i.name)] as const));
+	const refLists = Object.fromEntries(refListEntries) as Record<TestRefKind, string[]>;
 	const accountSubcontoMap: Record<string, string[]> = {};
 	for (const acc of CHART_OF_ACCOUNTS) {
-		if (acc.refKind) accountSubcontoMap[acc.code] = refLists[acc.refKind];
+		if (acc.refKind) accountSubcontoMap[acc.code] = refLists[acc.refKind] ?? [];
 	}
 
 	const rowsHtml = categories.length
@@ -637,14 +578,34 @@ export async function renderCardCategoriesPage(env: Env, url: URL): Promise<stri
 				.join("\n")
 		: `<tr><td colspan="4" class="empty-state">Разносок пока нет</td></tr>`;
 
-	const newCategoryFormHtml = `
-		<form method="post" action="/card-universal/categories">
-			${categoryFieldsHtml("newCat")}
-			<div class="drawer-actions">
-				<button type="submit" class="btn-primary">Добавить</button>
+	const newCategoryModalHtml = `
+		<button type="button" class="btn-primary" id="newCategoryTrigger">+ Разноска</button>
+		<div class="modal-overlay" id="newCategoryOverlay">
+			<div class="modal-card">
+				<h3>Новая разноска</h3>
+				<form method="post" action="/card-universal/categories">
+					${categoryFieldsHtml("newCat")}
+					<div class="modal-actions">
+						<button type="button" class="btn-secondary" id="newCategoryCancel">Отмена</button>
+						<button type="submit" class="btn-confirm">Добавить</button>
+					</div>
+				</form>
 			</div>
-		</form>
-		${bindCategoryAccountSubcontoScript("newCat", accountSubcontoMap, null, null)}
+		</div>
+		${categorySubcontoBindScript("newCat", accountSubcontoMap)}
+		<script>
+			(function () {
+				var overlay = document.getElementById("newCategoryOverlay");
+				var trigger = document.getElementById("newCategoryTrigger");
+				var cancelBtn = document.getElementById("newCategoryCancel");
+				trigger.addEventListener("click", function () {
+					overlay.classList.add("open");
+				});
+				cancelBtn.addEventListener("click", function () {
+					overlay.classList.remove("open");
+				});
+			})();
+		</script>
 	`;
 
 	const editModalsHtml = categories
@@ -669,16 +630,19 @@ export async function renderCardCategoriesPage(env: Env, url: URL): Promise<stri
 				</form>
 			</div>
 		</div>
-		${bindCategoryAccountSubcontoScript(prefix, accountSubcontoMap, c.debit_subconto, c.credit_subconto)}
+		${categorySubcontoBindScript(prefix, accountSubcontoMap, {
+				name: c.name,
+				debitAccount: c.debit_account,
+				debitSubconto: c.debit_subconto,
+				creditAccount: c.credit_account,
+				creditSubconto: c.credit_subconto,
+			})}
 		<script>
 			(function () {
 				var overlay = document.getElementById("${prefix}Overlay");
 				var cancelBtn = document.getElementById("${prefix}Cancel");
 				cancelBtn.addEventListener("click", function () {
 					overlay.classList.remove("open");
-				});
-				overlay.addEventListener("click", function (e) {
-					if (e.target === overlay) overlay.classList.remove("open");
 				});
 			})();
 		</script>`;
@@ -693,7 +657,7 @@ export async function renderCardCategoriesPage(env: Env, url: URL): Promise<stri
 	<div class="topbar">
 		<h1>Карточка Универсальная</h1>
 		<div class="topbar-actions">
-			${renderSimpleDrawer({ id: "newCategory", title: "Новая разноска", triggerLabel: "+ Разноска", bodyHtml: newCategoryFormHtml })}
+			${newCategoryModalHtml}
 		</div>
 	</div>
 	${renderSubTabs(CARD_TABS, "/card-universal/categories")}
@@ -720,5 +684,5 @@ export async function renderCardCategoriesPage(env: Env, url: URL): Promise<stri
 	</script>
 	`;
 
-	return renderPage("/card-universal", "Карточка Универсальная · Правила разноски", content);
+	return renderPage("/card-universal", "Карточка Универсальная · Правила разноски", content, env);
 }

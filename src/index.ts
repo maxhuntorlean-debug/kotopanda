@@ -2,73 +2,39 @@ import { renderBankPage } from "./pages/bank";
 import { renderBankRulesPage } from "./pages/bankRules";
 import { renderPlaceholderPage } from "./pages/placeholder";
 import { renderSettingsPage } from "./pages/settings";
-import { renderSuppliersListPage } from "./pages/suppliers";
-import { renderOffsetPage } from "./pages/offset";
-import { createOffsetDocument, updateOffsetDocument, deleteOffsetDocument, type OffsetDirection } from "./offset";
+import { renderTestReferencePage, testRefEntryForSlug } from "./pages/referencesTest";
+import { createTestRefItem, renameTestRefItem, deleteTestRefItem } from "./referencesTest";
+import { renderChartOfAccountsTestPage } from "./pages/chartOfAccountsTest";
+import { renderJournalTurnoverTestPage, renderJournalTurnoverTestAccountCardFragment, renderJournalTurnoverTestOperationModalFragment } from "./pages/journalTurnoverTest";
+import { renderJournalListTestPage } from "./pages/journalListTest";
+import { renderJournalDocumentsTestPage } from "./pages/journalDocumentsTest";
+import { renderCashTestPage, renderCashTestCategoriesPage, renderCashTestBalanceFragment } from "./pages/cashTest";
+import {
+	addTestCashOperation,
+	updateTestCashOperation,
+	deleteTestCashOperation,
+	createTestCashCategory,
+	updateTestCashCategory,
+	deleteTestCashCategory,
+	getOrCreateTestCashDocument,
+	closeTestCashDocument,
+	reopenTestCashDocument,
+	isTestCashOperationDocumentClosed,
+} from "./cashTest";
+import { createTestOperationDocument, updateTestOperationDocument, deleteTestOperationDocument, resolveTestFirmId, type TestOperationLineInput, type TestFirmCode } from "./operationDocumentTest";
 import { syncBankAccount } from "./sync";
 import { updateTransaction } from "./transactions";
 import { applyRulesToExisting, createRule, deleteRule } from "./rules";
-import { createSupplier, updateSupplier, deleteSupplier, getSupplierFull } from "./invoices";
-import { renderKassaPage, renderKassaDayPage, renderKassaBalanceFragment, renderKassaCategoriesPage } from "./pages/cash";
-import {
-	getOrCreateDocument,
-	addOperation,
-	updateOperation,
-	deleteOperation,
-	closeDocument,
-	reopenDocument,
-	createCashCategory,
-	updateCashCategory,
-	deleteCashCategory,
-	documentExists,
-	isOperationDocumentClosed,
-	type RegisterCode,
-} from "./cash";
 import { todayIso } from "./format";
 import { renderCardPage, renderCardCategoriesPage } from "./pages/card";
-import {
-	importCardStatement,
-	updateTransaction as updateCardTransaction,
-	createPostingCategory,
-	updatePostingCategory,
-	deletePostingCategory,
-} from "./card";
-import {
-	renderAccountingJournalPage,
-	renderAccountingTurnoverPage,
-	renderAccountCardPage,
-	renderAccountCardFragment,
-} from "./pages/accounting";
-import {
-	renderReferenceAccountsPage,
-	renderReferenceCashBoxesPage,
-	renderReferenceExpensesPage,
-	renderReferenceEmployeesPage,
-	renderReferenceOtherOperationsPage,
-} from "./pages/references";
-import {
-	createManualEntry,
-	updateManualEntry,
-	deleteManualEntry,
-	createOwnAccount,
-	renameOwnAccount,
-	deleteOwnAccount,
-	createCashBox,
-	renameCashBox,
-	deleteCashBox,
-	createExpenseItem,
-	renameExpenseItem,
-	deleteExpenseItem,
-	createEmployee,
-	renameEmployee,
-	deleteEmployee,
-	createOtherOperation,
-	renameOtherOperation,
-	deleteOtherOperation,
-	type Ledger,
-} from "./accounting";
+import { importCardStatement, createPostingCategory, updatePostingCategory, deletePostingCategory } from "./card";
+import { updateTransaction as updateCardTransaction } from "./cardTransactions";
+import { resolveCurrentUser, setAuthContext, sectionForPath, firstAllowedPath, createSessionCookie, clearSessionCookie, verifyLogin } from "./auth";
+import { renderLoginPage } from "./pages/login";
+import { renderAdminPage } from "./pages/admin";
+import { createUser, setUserRole, setUserActive, resetUserPassword, deleteUser, createRole, updateRolePermissions, deleteRole } from "./adminUsers";
 
-const PLACEHOLDER_PATHS = ["/dashboard", "/products", "/clients", "/reports"];
+const PLACEHOLDER_PATHS = ["/dashboard", "/products", "/clients", "/reports", "/offset"];
 
 // Страницы с выбором периода — период должен быть общим для всей системы: выбрал в одном
 // месте, и он подхватывается на остальных, пока не выберут другой (или не истечёт cookie).
@@ -80,14 +46,14 @@ const PERIOD_COOKIE_PATHS = new Set([
 	"/accounting/kotopanda",
 	"/accounting/kotopanda/turnover",
 	"/accounting/kotopanda/journal",
-	"/accounting/kotopanda/card",
 	"/accounting/kotopanda/card/fragment",
+	"/accounting/kotopanda/operation-modal",
 	"/accounting/elitka",
 	"/accounting/elitka/turnover",
 	"/accounting/elitka/journal",
-	"/accounting/elitka/card",
 	"/accounting/elitka/card/fragment",
-	"/offset",
+	"/accounting/elitka/operation-modal",
+	"/journal-list-test",
 ]);
 const PERIOD_COOKIE_NAME = "kp_period";
 
@@ -101,19 +67,44 @@ function readCookie(request: Request, name: string): string | null {
 	return null;
 }
 
-// Достаёт книгу (kotopanda|elitka) из пути вида /accounting/:ledger<suffix>, если путь ему
-// соответствует ровно — иначе null. Используется вместо runtime-regex на каждый роут ниже.
-function accountingLedgerMatch(path: string, suffix: string): Ledger | null {
-	const escapedSuffix = suffix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-	const match = path.match(new RegExp(`^/accounting/(kotopanda|elitka)${escapedSuffix}$`));
-	return match ? (match[1] as Ledger) : null;
-}
-
-// Аналог accountingLedgerMatch для касс: /sales-kotopanda<suffix> / /sales-elitka<suffix>.
-function salesRegisterMatch(path: string, suffix: string): RegisterCode | null {
+// Аналог testFirmMatch для касс: /sales-kotopanda<suffix> / /sales-elitka<suffix>.
+function salesRegisterMatch(path: string, suffix: string): TestFirmCode | null {
 	const escapedSuffix = suffix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 	const match = path.match(new RegExp(`^/sales-(kotopanda|elitka)${escapedSuffix}$`));
-	return match ? (match[1] as RegisterCode) : null;
+	return match ? (match[1] as TestFirmCode) : null;
+}
+
+// Общий матчер /:prefix/(kotopanda|elitka)<suffix> — используется и для Бухгалтерии
+// (/accounting/:firm<suffix>, на месте боевой после сноса), и для остальных тестовых страниц.
+function testFirmMatch(path: string, prefix: string, suffix: string): TestFirmCode | null {
+	const escapedSuffix = suffix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	const match = path.match(new RegExp(`^${prefix}/(kotopanda|elitka)${escapedSuffix}$`));
+	return match ? (match[1] as TestFirmCode) : null;
+}
+
+// Строки документа "Операция" (тест) приходят как line_<N>_<field> — группируем по N, а не
+// завязываемся на конкретное число строк. Общее и для создания, и для редактирования документа.
+function parseOperationDocumentLines(form: FormData): TestOperationLineInput[] {
+	const lineFields = new Map<number, Record<string, string>>();
+	for (const [key, value] of form.entries()) {
+		const match = key.match(/^line_(\d+)_(.+)$/);
+		if (!match) continue;
+		const idx = Number(match[1]);
+		if (!lineFields.has(idx)) lineFields.set(idx, {});
+		lineFields.get(idx)![match[2]] = String(value);
+	}
+
+	return [...lineFields.entries()]
+		.sort((a, b) => a[0] - b[0])
+		.map(([, f]) => ({
+			debitAccount: (f.debit_account ?? "").trim(),
+			debitSubcontoId: f.debit_subconto ? Number(f.debit_subconto) : null,
+			creditAccount: (f.credit_account ?? "").trim(),
+			creditSubcontoId: f.credit_subconto ? Number(f.credit_subconto) : null,
+			amount: Number(f.amount),
+			comment: f.comment ? f.comment.trim() || null : null,
+		}))
+		.filter((l) => l.debitAccount && l.creditAccount && Number.isFinite(l.amount) && l.amount > 0);
 }
 
 export default {
@@ -121,9 +112,60 @@ export default {
 		const url = new URL(request.url);
 		const path = url.pathname === "/" ? "/bank" : url.pathname;
 
-		// Старый путь до переноса Поставщиков в Справочники — на случай открытых вкладок/закладок.
-		if (path === "/suppliers" && request.method === "GET") {
-			return new Response(null, { status: 301, headers: { Location: `/references/suppliers${url.search}` } });
+		// Авторизация — см. обсуждение "Сделаем авторизацию?". /login отдаём без проверки сессии
+		// (иначе некуда логиниться), всё остальное — только залогиненным, и не-админам ещё и по
+		// разделу (sectionForPath), см. auth.ts.
+		if (path === "/login") {
+			const next = url.searchParams.get("next") ?? "/bank";
+			if (request.method === "GET") {
+				const already = await resolveCurrentUser(env, request);
+				if (already) return new Response(null, { status: 303, headers: { Location: firstAllowedPath(already) } });
+				return new Response(renderLoginPage(null, next), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+			}
+			if (request.method === "POST") {
+				const form = await request.formData();
+				const username = String(form.get("username") ?? "").trim();
+				const password = String(form.get("password") ?? "");
+				const formNext = String(form.get("next") ?? "/bank");
+				const userId = username && password ? await verifyLogin(env, username, password) : null;
+				if (!userId) {
+					return new Response(renderLoginPage("Неверный логин или пароль", formNext), {
+						status: 401,
+						headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
+					});
+				}
+				const cookie = await createSessionCookie(env, userId);
+				return new Response(null, { status: 303, headers: { Location: formNext.startsWith("/") ? formNext : "/bank", "set-cookie": cookie } });
+			}
+		}
+
+		if (path === "/logout" && request.method === "POST") {
+			return new Response(null, { status: 303, headers: { Location: "/login", "set-cookie": clearSessionCookie() } });
+		}
+
+		const currentUser = await resolveCurrentUser(env, request);
+		if (!currentUser) {
+			return new Response(null, { status: 303, headers: { Location: `/login?next=${encodeURIComponent(url.pathname + url.search)}` } });
+		}
+		setAuthContext(env, currentUser);
+		if (!currentUser.isAdmin) {
+			const section = sectionForPath(path);
+			const allowed = section !== null && section !== "admin" && currentUser.allowedSections.has(section);
+			if (!allowed) {
+				return new Response(null, { status: 303, headers: { Location: firstAllowedPath(currentUser) } });
+			}
+		}
+
+		// Поставщики (counterparties) снесены — дублировали справочник "Поставщики" в Настройках
+		// (test_suppliers, см. обсуждение "тестовые станут боевыми"). Старые ссылки ведём туда же.
+		if ((path === "/suppliers" || path === "/references/suppliers") && request.method === "GET") {
+			return new Response(null, { status: 301, headers: { Location: `/settings/references/suppliers${url.search}` } });
+		}
+
+		// Администрирование переехало из отдельного пункта меню во вкладку Настроек — на случай
+		// закладок у админа.
+		if (path === "/admin" && request.method === "GET") {
+			return new Response(null, { status: 301, headers: { Location: "/settings/admin" } });
 		}
 
 		// Старые пути настроек Банка/Кассы до переноса в общие Настройки — на случай закладок.
@@ -140,8 +182,15 @@ export default {
 		}
 
 		// План счетов больше не вкладка внутри книги (он общий на обе) — переехал в Настройки.
-		if (accountingLedgerMatch(path, "/chart") && request.method === "GET") {
+		if (testFirmMatch(path, "/accounting", "/chart") && request.method === "GET") {
 			return new Response(null, { status: 301, headers: { Location: "/settings" } });
+		}
+
+		// Отдельной страницы "Карточка счёта" у новой Бухгалтерии нет (она открывается прямо на
+		// Обороте AJAX-фрагментом, см. renderJournalTurnoverTestAccountCardFragment) — старый
+		// путь /accounting/:ledger/card ведём на саму Оборотку.
+		if (testFirmMatch(path, "/accounting", "/card") && request.method === "GET") {
+			return new Response(null, { status: 301, headers: { Location: `/accounting/${testFirmMatch(path, "/accounting", "/card")}${url.search}` } });
 		}
 
 		// "Тест 2" стал основной Обороткой Котопанды (и позже — Элитки), "тест 1" убрали из меню
@@ -154,6 +203,42 @@ export default {
 		}
 		if (path === "/accounting-turnover-test" && request.method === "GET") {
 			return new Response(null, { status: 301, headers: { Location: `/accounting/kotopanda${url.search}` } });
+		}
+
+		// Голый /settings/references — сразу на первый справочник (как /references/accounts у боевых).
+		if (path === "/settings/references" && request.method === "GET") {
+			return new Response(null, { status: 301, headers: { Location: "/settings/references/accounts" } });
+		}
+
+		// Справочники (тест) и План счетов (тест) переехали внутрь Настроек как вкладки —
+		// старые пути ведём туда же (тот же приём, что и для боевой Бухгалтерии/тестового журнала).
+		const legacyRefTestMatch = path.match(/^\/references-test(\/([a-z-]+)(\/(\d+)\/(update|delete))?)?$/);
+		if (legacyRefTestMatch && request.method === "GET") {
+			return new Response(null, { status: 301, headers: { Location: `/settings/references${legacyRefTestMatch[1] ?? "/accounts"}` } });
+		}
+		if (path === "/chart-test" && request.method === "GET") {
+			return new Response(null, { status: 301, headers: { Location: "/settings/chart" } });
+		}
+
+		// Тестовый журнал (Оборотка/Журнал Операций) переехал на место боевой Бухгалтерии — см.
+		// обсуждение "тестовые станут боевыми". Старые пути (с разделением на фирмы и без — вся
+		// добевая история была Котопандой) ведём на /accounting/:firm[/journal].
+		const legacyTestJournalMatch = path.match(/^\/(journal-turnover-test|journal-documents-test)(\/(kotopanda|elitka))?(\/(operation-modal|card\/fragment))?$/);
+		if (legacyTestJournalMatch && request.method === "GET") {
+			const base = legacyTestJournalMatch[1];
+			const firm = legacyTestJournalMatch[3] ?? "kotopanda";
+			const extra = legacyTestJournalMatch[5];
+			const suffix = base === "journal-turnover-test" ? (extra ? `/${extra}` : "") : "/journal";
+			return new Response(null, { status: 301, headers: { Location: `/accounting/${firm}${suffix}${url.search}` } });
+		}
+
+		// Касса (тест) переехала на место боевой — /sales-kotopanda и /sales-elitka (см. обсуждение
+		// "тестовые станут боевыми"). Старые ссылки на /cash-test/:firm ведём туда же.
+		const legacyCashTestMatch = path.match(/^\/cash-test\/(kotopanda|elitka)(\/.*)?$/);
+		if (legacyCashTestMatch && request.method === "GET") {
+			const firm = legacyCashTestMatch[1];
+			const suffix = legacyCashTestMatch[2] ?? "";
+			return new Response(null, { status: 301, headers: { Location: `/sales-${firm}${suffix}${url.search}` } });
 		}
 
 		if (path === "/bank/sync" && request.method === "POST") {
@@ -204,9 +289,11 @@ export default {
 			const postingSubconto = form.get("subconto") ? String(form.get("subconto")).trim() || null : null;
 			const autoStatus = form.get("auto_status") === "review" ? "review" : "done";
 			const priority = Number(form.get("priority")) || 0;
+			// Приватбанк — всегда счёт фирмы Котопанда (см. обсуждение), выбора нет и не нужен.
+			const firmId = await resolveTestFirmId(env, "kotopanda");
 
 			if (matchValue && postingAccount) {
-				await createRule(env, { matchField, matchValue, postingAccount, postingSubconto, autoStatus, priority });
+				await createRule(env, { matchField, matchValue, postingAccount, postingSubconto, autoStatus, priority, firmId });
 			}
 
 			return new Response(null, { status: 303, headers: { Location: "/bank/rules" } });
@@ -218,6 +305,8 @@ export default {
 			return new Response(null, { status: 303, headers: { Location: "/bank/rules" } });
 		}
 
+
+
 		if (path === "/bank/transactions/update" && request.method === "POST") {
 			const form = await request.formData();
 			const id = Number(form.get("id"));
@@ -226,15 +315,17 @@ export default {
 			const postingAccount = accountRaw && String(accountRaw).length > 0 ? String(accountRaw) : null;
 			const subcontoRaw = form.get("subconto");
 			const postingSubconto = subcontoRaw && String(subcontoRaw).trim().length > 0 ? String(subcontoRaw).trim() : null;
+			// Приватбанк — всегда счёт фирмы Котопанда (см. обсуждение), выбора нет и не нужен.
+			const firmId = postingAccount ? await resolveTestFirmId(env, "kotopanda") : null;
 
 			if (Number.isInteger(id)) {
-				await updateTransaction(env, id, postingAccount, postingSubconto);
+				await updateTransaction(env, id, postingAccount, postingSubconto, firmId);
 
 				if (form.get("create_rule") && postingAccount) {
 					const matchField = form.get("rule_match_field") === "counterparty_name" ? "counterparty_name" : "counterparty_account";
 					const matchValue = String(form.get("rule_match_value") ?? "").trim();
 					if (matchValue) {
-						await createRule(env, { matchField, matchValue, postingAccount, postingSubconto, autoStatus: "done", priority: 0 });
+						await createRule(env, { matchField, matchValue, postingAccount, postingSubconto, autoStatus: "done", priority: 0, firmId });
 					}
 				}
 			}
@@ -242,225 +333,161 @@ export default {
 			return new Response(null, { status: 303, headers: { Location: `/bank?period=${encodeURIComponent(period)}` } });
 		}
 
-		if (path === "/references/suppliers" && request.method === "POST") {
-			const form = await request.formData();
-			const name = String(form.get("name") ?? "").trim();
-			if (name) {
-				await createSupplier(env, name);
-			}
-			return new Response(null, { status: 303, headers: { Location: "/references/suppliers" } });
-		}
-
-		const supplierUpdateMatch = path.match(/^\/references\/suppliers\/(\d+)\/update$/);
-		if (supplierUpdateMatch && request.method === "POST") {
-			const supplierId = Number(supplierUpdateMatch[1]);
-			const form = await request.formData();
-			const name = String(form.get("name") ?? "").trim();
-
-			// Форма сейчас показывает только название — поля счёта/ЄДРПОУ/категории не трогаем,
-			// чтобы не затереть то, что было сохранено раньше (если вообще было).
-			const existing = await getSupplierFull(env, supplierId);
-			const iban = existing?.iban ?? null;
-			const taxId = existing?.tax_id ?? null;
-			const defaultCategoryId = existing?.default_category_id ?? null;
-
-			if (name) {
-				await updateSupplier(env, supplierId, { name, iban, taxId, defaultCategoryId });
-			}
-
-			return new Response(null, { status: 303, headers: { Location: "/references/suppliers" } });
-		}
-
-		const supplierDeleteMatch = path.match(/^\/references\/suppliers\/(\d+)\/delete$/);
-		if (supplierDeleteMatch && request.method === "POST") {
-			const supplierId = Number(supplierDeleteMatch[1]);
-			const result = await deleteSupplier(env, supplierId);
-
-			if (result.ok) {
-				return new Response(null, { status: 303, headers: { Location: "/references/suppliers?deleted=1" } });
-			}
-			return new Response(null, {
-				status: 303,
-				headers: { Location: `/references/suppliers?delete_error=${encodeURIComponent(result.reason)}` },
-			});
-		}
-
-		const salesDayCreateMatch = salesRegisterMatch(path, "/day");
-		if (salesDayCreateMatch && request.method === "POST") {
-			const registerCode = salesDayCreateMatch;
-			const form = await request.formData();
-			const dateRaw = String(form.get("date") ?? "");
-			const date = /^\d{4}-\d{2}-\d{2}$/.test(dateRaw) ? dateRaw : todayIso();
-
-			if (await documentExists(env, registerCode, date)) {
-				return new Response(null, {
-					status: 303,
-					headers: { Location: `/sales-${registerCode}?create_error=${encodeURIComponent(`Документ на ${date} уже существует`)}` },
-				});
-			}
-
-			await getOrCreateDocument(env, registerCode, date);
-			return new Response(null, { status: 303, headers: { Location: `/sales-${registerCode}/day?date=${encodeURIComponent(date)}` } });
-		}
-
+		// Касса Котопанда/Элитка — раньше боевой модуль (getOrCreateDocument/addOperation/...,
+		// см. cash.ts), теперь на его месте новая Касса (см. cashTest.ts/pages/cashTest.ts) —
+		// та же /sales-* адресация (только явного POST-создания дня больше нет: открытие даты в
+		// renderCashTestPage — обычная GET-форма, документ заводится неявно внутри
+		// getOrCreateTestCashDocument/addTestCashOperation при первом обращении).
 		const salesOperationsCreateMatch = salesRegisterMatch(path, "/operations");
 		if (salesOperationsCreateMatch && request.method === "POST") {
-			const registerCode = salesOperationsCreateMatch;
+			const firm = salesOperationsCreateMatch;
 			const form = await request.formData();
-			const date = String(form.get("date") ?? todayIso());
-			const categoryRaw = form.get("category_id");
-			const categoryId = categoryRaw && String(categoryRaw).length > 0 ? Number(categoryRaw) : null;
+			const date = String(form.get("date") ?? "");
+			const period = String(form.get("period") ?? "this_month");
+			const categoryId = Number(form.get("category_id"));
+			const subcontoRaw = form.get("subconto_id");
+			const subcontoId = subcontoRaw ? Number(subcontoRaw) : null;
 			const amount = Number(form.get("amount"));
-			const comment = form.get("comment") ? String(form.get("comment")) : null;
-			const subconto = form.get("subconto") ? String(form.get("subconto")).trim() || null : null;
+			const comment = form.get("comment") ? String(form.get("comment")).trim() || null : null;
+			const basePath = `/sales-${firm}`;
 
-			const doc = await getOrCreateDocument(env, registerCode, date);
-			if (doc.closed_at !== null) {
+			const firmId = await resolveTestFirmId(env, firm);
+			const doc = await getOrCreateTestCashDocument(env, firmId, date);
+			if (doc.closedAt !== null) {
 				return new Response(null, {
 					status: 303,
-					headers: { Location: `/sales-${registerCode}/day?date=${encodeURIComponent(date)}&op_error=${encodeURIComponent("День закрыт — сначала откройте его снова")}` },
+					headers: { Location: `${basePath}?period=${encodeURIComponent(period)}&date=${date}&op_error=${encodeURIComponent("День закрыт — сначала откройте его снова")}` },
 				});
 			}
 
-			if (categoryId && Number.isFinite(amount) && amount > 0) {
-				await addOperation(env, doc.id, categoryId, amount, comment, subconto);
+			if (date && categoryId && Number.isFinite(amount) && amount > 0) {
+				await addTestCashOperation(env, firmId, date, categoryId, subcontoId, amount, comment);
 			}
-
-			return new Response(null, { status: 303, headers: { Location: `/sales-${registerCode}/day?date=${encodeURIComponent(date)}` } });
-		}
-
-		const opDeleteMatch = path.match(/^\/sales-(kotopanda|elitka)\/operations\/(\d+)\/delete$/);
-		if (opDeleteMatch && request.method === "POST") {
-			const registerCode = opDeleteMatch[1] as RegisterCode;
-			const form = await request.formData();
-			const date = String(form.get("date") ?? todayIso());
-			const opId = Number(opDeleteMatch[2]);
-
-			if (await isOperationDocumentClosed(env, opId)) {
-				return new Response(null, {
-					status: 303,
-					headers: { Location: `/sales-${registerCode}/day?date=${encodeURIComponent(date)}&op_error=${encodeURIComponent("День закрыт — сначала откройте его снова")}` },
-				});
-			}
-
-			await deleteOperation(env, opId);
-			return new Response(null, { status: 303, headers: { Location: `/sales-${registerCode}/day?date=${encodeURIComponent(date)}` } });
+			return new Response(null, { status: 303, headers: { Location: `${basePath}?period=${encodeURIComponent(period)}&date=${date}` } });
 		}
 
 		const opUpdateMatch = path.match(/^\/sales-(kotopanda|elitka)\/operations\/(\d+)\/update$/);
 		if (opUpdateMatch && request.method === "POST") {
-			const registerCode = opUpdateMatch[1] as RegisterCode;
+			const firm = opUpdateMatch[1] as TestFirmCode;
+			const journalId = Number(opUpdateMatch[2]);
 			const form = await request.formData();
-			const date = String(form.get("date") ?? todayIso());
-			const opId = Number(opUpdateMatch[2]);
-			const categoryRaw = form.get("category_id");
-			const categoryId = categoryRaw && String(categoryRaw).length > 0 ? Number(categoryRaw) : null;
+			const date = String(form.get("date") ?? "");
+			const period = String(form.get("period") ?? "this_month");
+			const categoryId = Number(form.get("category_id"));
+			const subcontoRaw = form.get("subconto_id");
+			const subcontoId = subcontoRaw ? Number(subcontoRaw) : null;
 			const amount = Number(form.get("amount"));
-			const comment = form.get("comment") ? String(form.get("comment")) : null;
-			const subconto = form.get("subconto") ? String(form.get("subconto")).trim() || null : null;
+			const comment = form.get("comment") ? String(form.get("comment")).trim() || null : null;
+			const basePath = `/sales-${firm}`;
 
-			if (await isOperationDocumentClosed(env, opId)) {
+			if (await isTestCashOperationDocumentClosed(env, journalId)) {
 				return new Response(null, {
 					status: 303,
-					headers: { Location: `/sales-${registerCode}/day?date=${encodeURIComponent(date)}&op_error=${encodeURIComponent("День закрыт — сначала откройте его снова")}` },
+					headers: { Location: `${basePath}?period=${encodeURIComponent(period)}&date=${date}&op_error=${encodeURIComponent("День закрыт — сначала откройте его снова")}` },
 				});
 			}
 
 			if (categoryId && Number.isFinite(amount) && amount > 0) {
-				await updateOperation(env, opId, categoryId, amount, comment, subconto);
+				await updateTestCashOperation(env, journalId, categoryId, subcontoId, amount, comment);
+			}
+			return new Response(null, { status: 303, headers: { Location: `${basePath}?period=${encodeURIComponent(period)}&date=${date}` } });
+		}
+
+		const opDeleteMatch = path.match(/^\/sales-(kotopanda|elitka)\/operations\/(\d+)\/delete$/);
+		if (opDeleteMatch && request.method === "POST") {
+			const firm = opDeleteMatch[1] as TestFirmCode;
+			const journalId = Number(opDeleteMatch[2]);
+			const form = await request.formData();
+			const date = String(form.get("date") ?? "");
+			const period = String(form.get("period") ?? "this_month");
+			const basePath = `/sales-${firm}`;
+
+			if (await isTestCashOperationDocumentClosed(env, journalId)) {
+				return new Response(null, {
+					status: 303,
+					headers: { Location: `${basePath}?period=${encodeURIComponent(period)}&date=${date}&op_error=${encodeURIComponent("День закрыт — сначала откройте его снова")}` },
+				});
 			}
 
-			return new Response(null, { status: 303, headers: { Location: `/sales-${registerCode}/day?date=${encodeURIComponent(date)}` } });
+			await deleteTestCashOperation(env, journalId);
+			return new Response(null, { status: 303, headers: { Location: `${basePath}?period=${encodeURIComponent(period)}&date=${date}` } });
 		}
 
 		const salesCloseMatch = salesRegisterMatch(path, "/close");
 		if (salesCloseMatch && request.method === "POST") {
-			const registerCode = salesCloseMatch;
+			const firm = salesCloseMatch;
 			const form = await request.formData();
-			const date = String(form.get("date") ?? todayIso());
-			const doc = await getOrCreateDocument(env, registerCode, date);
-			await closeDocument(env, doc.id);
-			return new Response(null, { status: 303, headers: { Location: `/sales-${registerCode}/day?date=${encodeURIComponent(date)}` } });
+			const date = String(form.get("date") ?? "");
+			const period = String(form.get("period") ?? "this_month");
+			const basePath = `/sales-${firm}`;
+			const firmId = await resolveTestFirmId(env, firm);
+			const doc = await getOrCreateTestCashDocument(env, firmId, date);
+			await closeTestCashDocument(env, doc.id);
+			return new Response(null, { status: 303, headers: { Location: `${basePath}?period=${encodeURIComponent(period)}&date=${date}` } });
 		}
 
 		const salesReopenMatch = salesRegisterMatch(path, "/reopen");
 		if (salesReopenMatch && request.method === "POST") {
-			const registerCode = salesReopenMatch;
+			const firm = salesReopenMatch;
 			const form = await request.formData();
-			const date = String(form.get("date") ?? todayIso());
-			const doc = await getOrCreateDocument(env, registerCode, date);
-			await reopenDocument(env, doc.id);
-			return new Response(null, { status: 303, headers: { Location: `/sales-${registerCode}/day?date=${encodeURIComponent(date)}` } });
+			const date = String(form.get("date") ?? "");
+			const period = String(form.get("period") ?? "this_month");
+			const basePath = `/sales-${firm}`;
+			const firmId = await resolveTestFirmId(env, firm);
+			const doc = await getOrCreateTestCashDocument(env, firmId, date);
+			await reopenTestCashDocument(env, doc.id);
+			return new Response(null, { status: 303, headers: { Location: `${basePath}?period=${encodeURIComponent(period)}&date=${date}` } });
 		}
 
 		const salesCategoriesCreateMatch = salesRegisterMatch(path, "/categories");
 		if (salesCategoriesCreateMatch && request.method === "POST") {
-			const registerCode = salesCategoriesCreateMatch;
+			const firm = salesCategoriesCreateMatch;
 			const form = await request.formData();
+			const basePath = `/sales-${firm}/categories`;
 			const name = String(form.get("name") ?? "").trim();
-			const direction = String(form.get("direction") ?? "");
+			const direction = form.get("direction") === "expense" ? "expense" : "income";
 			const debitAccount = String(form.get("debit_account") ?? "").trim();
-			const debitSubconto = String(form.get("debit_subconto") ?? "").trim();
 			const creditAccount = String(form.get("credit_account") ?? "").trim();
-			const creditSubconto = String(form.get("credit_subconto") ?? "").trim();
+			const debitSubcontoRaw = form.get("debit_subconto_id");
+			const creditSubcontoRaw = form.get("credit_subconto_id");
+			const debitSubcontoId = debitSubcontoRaw ? Number(debitSubcontoRaw) : null;
+			const creditSubcontoId = creditSubcontoRaw ? Number(creditSubcontoRaw) : null;
 
-			if (name && debitAccount && creditAccount && (direction === "income" || direction === "expense")) {
-				await createCashCategory(env, registerCode, {
-					name,
-					direction,
-					debitAccount,
-					debitSubconto: debitSubconto || null,
-					creditAccount,
-					creditSubconto: creditSubconto || null,
-				});
+			if (name && debitAccount && creditAccount) {
+				const firmId = await resolveTestFirmId(env, firm);
+				await createTestCashCategory(env, firmId, { name, direction, debitAccount, debitSubcontoId, creditAccount, creditSubcontoId });
 			}
-
-			return new Response(null, { status: 303, headers: { Location: `/sales-${registerCode}/categories` } });
-		}
-
-		const categoryDeleteMatch = path.match(/^\/sales-(kotopanda|elitka)\/categories\/(\d+)\/delete$/);
-		if (categoryDeleteMatch && request.method === "POST") {
-			const registerCode = categoryDeleteMatch[1] as RegisterCode;
-			const result = await deleteCashCategory(env, Number(categoryDeleteMatch[2]));
-			const location = result.ok ? `/sales-${registerCode}/categories` : `/sales-${registerCode}/categories?delete_error=${encodeURIComponent(result.reason ?? "")}`;
-			return new Response(null, { status: 303, headers: { Location: location } });
+			return new Response(null, { status: 303, headers: { Location: basePath } });
 		}
 
 		const categoryUpdateMatch = path.match(/^\/sales-(kotopanda|elitka)\/categories\/(\d+)\/update$/);
 		if (categoryUpdateMatch && request.method === "POST") {
-			const registerCode = categoryUpdateMatch[1] as RegisterCode;
+			const firm = categoryUpdateMatch[1] as TestFirmCode;
+			const id = Number(categoryUpdateMatch[2]);
 			const form = await request.formData();
+			const basePath = `/sales-${firm}/categories`;
 			const name = String(form.get("name") ?? "").trim();
-			const direction = String(form.get("direction") ?? "");
+			const direction = form.get("direction") === "expense" ? "expense" : "income";
 			const debitAccount = String(form.get("debit_account") ?? "").trim();
-			const debitSubconto = String(form.get("debit_subconto") ?? "").trim();
 			const creditAccount = String(form.get("credit_account") ?? "").trim();
-			const creditSubconto = String(form.get("credit_subconto") ?? "").trim();
+			const debitSubcontoRaw = form.get("debit_subconto_id");
+			const creditSubcontoRaw = form.get("credit_subconto_id");
+			const debitSubcontoId = debitSubcontoRaw ? Number(debitSubcontoRaw) : null;
+			const creditSubcontoId = creditSubcontoRaw ? Number(creditSubcontoRaw) : null;
 
-			if (name && debitAccount && creditAccount && (direction === "income" || direction === "expense")) {
-				await updateCashCategory(env, Number(categoryUpdateMatch[2]), {
-					name,
-					direction,
-					debitAccount,
-					debitSubconto: debitSubconto || null,
-					creditAccount,
-					creditSubconto: creditSubconto || null,
-				});
+			if (name && debitAccount && creditAccount) {
+				await updateTestCashCategory(env, id, { name, direction, debitAccount, debitSubcontoId, creditAccount, creditSubcontoId });
 			}
-
-			return new Response(null, { status: 303, headers: { Location: `/sales-${registerCode}/categories` } });
+			return new Response(null, { status: 303, headers: { Location: basePath } });
 		}
 
-		const salesSettingsMatch = salesRegisterMatch(path, "/settings");
-		if (salesSettingsMatch && request.method === "POST") {
-			const registerCode = salesSettingsMatch;
-			const form = await request.formData();
-			const subcontoRaw = form.get("posting_subconto");
-			const postingSubconto = subcontoRaw && String(subcontoRaw).trim().length > 0 ? String(subcontoRaw).trim() : null;
-
-			await env.DB.prepare(`UPDATE cash_registers SET posting_subconto = ? WHERE code = ?`).bind(postingSubconto, registerCode).run();
-
-			return new Response(null, { status: 303, headers: { Location: "/settings" } });
+		const categoryDeleteMatch = path.match(/^\/sales-(kotopanda|elitka)\/categories\/(\d+)\/delete$/);
+		if (categoryDeleteMatch && request.method === "POST") {
+			const firm = categoryDeleteMatch[1] as TestFirmCode;
+			const id = Number(categoryDeleteMatch[2]);
+			const basePath = `/sales-${firm}/categories`;
+			const result = await deleteTestCashCategory(env, id);
+			return new Response(null, { status: 303, headers: { Location: result.ok ? basePath : `${basePath}?delete_error=${encodeURIComponent(result.reason ?? "")}` } });
 		}
 
 		if (path === "/card-universal/upload" && request.method === "POST") {
@@ -489,9 +516,12 @@ export default {
 			const postingCategoryId = postingRaw && String(postingRaw).length > 0 ? Number(postingRaw) : null;
 			const subcontoRaw = form.get("subconto");
 			const subconto = subcontoRaw && String(subcontoRaw).trim().length > 0 ? String(subcontoRaw).trim() : null;
+			// Карта — всегда фирма Котопанда (см. обсуждение "Проверь чтоб проводки потом делались"),
+			// та же логика, что и у Банка.
+			const firmId = postingCategoryId ? await resolveTestFirmId(env, "kotopanda") : null;
 
 			if (Number.isInteger(id)) {
-				await updateCardTransaction(env, id, postingCategoryId, subconto);
+				await updateCardTransaction(env, id, postingCategoryId, subconto, firmId);
 			}
 
 			return new Response(null, { status: 303, headers: { Location: `/card-universal?period=${encodeURIComponent(period)}` } });
@@ -508,61 +538,6 @@ export default {
 			}
 
 			return new Response(null, { status: 303, headers: { Location: "/settings" } });
-		}
-
-		if (path === "/offset/settings" && request.method === "POST") {
-			const form = await request.formData();
-			const subcontoRaw = form.get("posting_subconto");
-			const postingSubconto = subcontoRaw && String(subcontoRaw).trim().length > 0 ? String(subcontoRaw).trim() : null;
-
-			const offsetSettings = await env.DB.prepare(`SELECT id FROM offset_settings LIMIT 1`).first<{ id: number }>();
-			if (offsetSettings) {
-				await env.DB.prepare(`UPDATE offset_settings SET posting_subconto = ? WHERE id = ?`).bind(postingSubconto, offsetSettings.id).run();
-			}
-
-			return new Response(null, { status: 303, headers: { Location: "/settings" } });
-		}
-
-		if ((path === "/offset" || path.match(/^\/offset\/\d+\/update$/)) && request.method === "POST") {
-			const offsetUpdateMatch = path.match(/^\/offset\/(\d+)\/update$/);
-			const form = await request.formData();
-			const period = String(form.get("period") ?? "this_month");
-			const direction: OffsetDirection = form.get("direction") === "elitka_to_kotopanda" ? "elitka_to_kotopanda" : "kotopanda_to_elitka";
-			const docDate = String(form.get("entry_date") ?? "");
-			const kotopandaAccount = String(form.get("offsetAccount1_account") ?? "").trim();
-			const kotopandaSubconto = String(form.get("offsetAccount1_subconto") ?? "").trim();
-			const elitkaAccount = String(form.get("offsetAccount2_account") ?? "").trim();
-			const elitkaSubconto = String(form.get("offsetAccount2_subconto") ?? "").trim();
-			const amount = Number(form.get("amount"));
-			const description = form.get("description") ? String(form.get("description")).trim() || null : null;
-
-			if (docDate && kotopandaAccount && elitkaAccount && Number.isFinite(amount) && amount > 0) {
-				const input = {
-					docDate,
-					direction,
-					kotopandaAccount,
-					kotopandaSubconto: kotopandaSubconto || null,
-					elitkaAccount,
-					elitkaSubconto: elitkaSubconto || null,
-					amount,
-					description,
-				};
-				if (offsetUpdateMatch) {
-					await updateOffsetDocument(env, Number(offsetUpdateMatch[1]), input);
-				} else {
-					await createOffsetDocument(env, input);
-				}
-			}
-
-			return new Response(null, { status: 303, headers: { Location: `/offset?period=${encodeURIComponent(period)}` } });
-		}
-
-		const offsetDeleteMatch = path.match(/^\/offset\/(\d+)\/delete$/);
-		if (offsetDeleteMatch && request.method === "POST") {
-			const form = await request.formData();
-			const period = String(form.get("period") ?? "this_month");
-			await deleteOffsetDocument(env, Number(offsetDeleteMatch[1]));
-			return new Response(null, { status: 303, headers: { Location: `/offset?period=${encodeURIComponent(period)}` } });
 		}
 
 		if (path === "/card-universal/categories" && request.method === "POST") {
@@ -615,192 +590,149 @@ export default {
 			return new Response(null, { status: 303, headers: { Location: "/card-universal/categories" } });
 		}
 
-		const journalCreateMatch = path.match(/^\/accounting\/(kotopanda|elitka)\/journal$/);
-		if (journalCreateMatch && request.method === "POST") {
-			const ledger = journalCreateMatch[1] as Ledger;
-			const form = await request.formData();
-			const period = String(form.get("period") ?? "this_month");
-			const entryDate = String(form.get("entry_date") ?? "");
-			const debitAccount = String(form.get("debit_account") ?? "").trim();
-			const debitSubconto = String(form.get("debit_subconto") ?? "").trim();
-			const creditAccount = String(form.get("credit_account") ?? "").trim();
-			const creditSubconto = String(form.get("credit_subconto") ?? "").trim();
-			const amount = Number(form.get("amount"));
-			const quantityRaw = form.get("quantity");
-			const quantity = quantityRaw && String(quantityRaw).length > 0 ? Number(quantityRaw) : null;
-			const description = form.get("description") ? String(form.get("description")).trim() || null : null;
+		// "Справочники" (вкладка Настроек, тест-песочница поверх test_* таблиц, см.
+		// referencesTest.ts). Все 6 видов справочника одинаковой формы, поэтому один
+		// параметризованный набор роутов вместо шести копий, как выше для боевых справочников.
+		const testRefCreateMatch = path.match(/^\/settings\/references\/([a-z-]+)$/);
+		if (testRefCreateMatch && request.method === "POST") {
+			const slug = testRefCreateMatch[1];
+			const entry = testRefEntryForSlug(slug);
+			if (entry) {
+				const form = await request.formData();
+				const name = String(form.get("name") ?? "").trim();
+				if (name) await createTestRefItem(env, entry.kind, name);
+			}
+			return new Response(null, { status: 303, headers: { Location: `/settings/references/${slug}` } });
+		}
 
-			if (entryDate && debitAccount && creditAccount && Number.isFinite(amount) && amount > 0) {
-				await createManualEntry(env, ledger, {
-					entryDate,
-					debitAccount,
-					debitSubconto: debitSubconto || null,
-					creditAccount,
-					creditSubconto: creditSubconto || null,
-					quantity: quantity !== null && Number.isFinite(quantity) ? quantity : null,
-					amount,
-					description,
-				});
+		const testRefUpdateMatch = path.match(/^\/settings\/references\/([a-z-]+)\/(\d+)\/update$/);
+		if (testRefUpdateMatch && request.method === "POST") {
+			const slug = testRefUpdateMatch[1];
+			const entry = testRefEntryForSlug(slug);
+			if (entry) {
+				const form = await request.formData();
+				const name = String(form.get("name") ?? "").trim();
+				if (name) await renameTestRefItem(env, entry.kind, Number(testRefUpdateMatch[2]), name);
+			}
+			return new Response(null, { status: 303, headers: { Location: `/settings/references/${slug}` } });
+		}
+
+		const testRefDeleteMatch = path.match(/^\/settings\/references\/([a-z-]+)\/(\d+)\/delete$/);
+		if (testRefDeleteMatch && request.method === "POST") {
+			const slug = testRefDeleteMatch[1];
+			const entry = testRefEntryForSlug(slug);
+			if (entry) await deleteTestRefItem(env, entry.kind, Number(testRefDeleteMatch[2]));
+			return new Response(null, { status: 303, headers: { Location: `/settings/references/${slug}` } });
+		}
+
+		// Документ "Операция" (тест) — общий для Оборотки, Проводок и Журнала операций (см.
+		// newOperationModalHtml/editOperationModalHtml в pages/operationDocumentTest.ts). firm —
+		// скрытое поле формы (см. operationModalHtml): для создания решает, какой фирме принадлежит
+		// новый документ, для правки не используется (фирма документа не меняется, см.
+		// updateTestOperationDocument), но форма его всё равно отправляет — так что просто игнорируем.
+		if (path === "/operation-document-test" && request.method === "POST") {
+			const form = await request.formData();
+			const returnTo = String(form.get("return_to") ?? "/accounting/kotopanda");
+			const docDate = String(form.get("doc_date") ?? "");
+			const description = form.get("description") ? String(form.get("description")).trim() || null : null;
+			const firm = form.get("firm") === "elitka" ? "elitka" : "kotopanda";
+			const lines = parseOperationDocumentLines(form);
+
+			if (docDate && lines.length) {
+				const firmId = await resolveTestFirmId(env, firm);
+				await createTestOperationDocument(env, { docDate, description, firmId, lines });
 			}
 
-			// return_to — модалка "+ Проводка" открывается не только со страницы Проводок, но и с
-			// Оборотки (см. newEntryModalHtml в pages/accounting.ts); по умолчанию (старые формы без
-			// этого поля) ведём на Проводки, как и раньше. Разрешаем редирект только внутри /accounting/,
-			// чтобы это скрытое поле формы нельзя было использовать как открытый редирект.
-			const returnToRaw = String(form.get("return_to") ?? "");
-			const returnTo = returnToRaw.startsWith("/accounting/") ? returnToRaw : `/accounting/${ledger}/journal?period=${encodeURIComponent(period)}`;
-
-			return new Response(null, { status: 303, headers: { Location: returnTo } });
+			return new Response(null, { status: 303, headers: { Location: returnTo.startsWith("/accounting") ? returnTo : "/accounting/kotopanda" } });
 		}
 
-		const journalUpdateMatch = path.match(/^\/accounting\/(kotopanda|elitka)\/journal\/(\d+)\/update$/);
-		if (journalUpdateMatch && request.method === "POST") {
-			const ledger = journalUpdateMatch[1] as Ledger;
+		const opDocUpdateMatch = path.match(/^\/operation-document-test\/(\d+)\/update$/);
+		if (opDocUpdateMatch && request.method === "POST") {
+			const documentId = Number(opDocUpdateMatch[1]);
 			const form = await request.formData();
-			const period = String(form.get("period") ?? "this_month");
-			const entryDate = String(form.get("entry_date") ?? "");
-			const debitAccount = String(form.get("debit_account") ?? "").trim();
-			const debitSubconto = String(form.get("debit_subconto") ?? "").trim();
-			const creditAccount = String(form.get("credit_account") ?? "").trim();
-			const creditSubconto = String(form.get("credit_subconto") ?? "").trim();
-			const amount = Number(form.get("amount"));
-			const quantityRaw = form.get("quantity");
-			const quantity = quantityRaw && String(quantityRaw).length > 0 ? Number(quantityRaw) : null;
+			const returnTo = String(form.get("return_to") ?? "/accounting/kotopanda/journal");
+			const docDate = String(form.get("doc_date") ?? "");
 			const description = form.get("description") ? String(form.get("description")).trim() || null : null;
+			const lines = parseOperationDocumentLines(form);
 
-			if (entryDate && debitAccount && creditAccount && Number.isFinite(amount) && amount > 0) {
-				await updateManualEntry(env, Number(journalUpdateMatch[2]), {
-					entryDate,
-					debitAccount,
-					debitSubconto: debitSubconto || null,
-					creditAccount,
-					creditSubconto: creditSubconto || null,
-					quantity: quantity !== null && Number.isFinite(quantity) ? quantity : null,
-					amount,
-					description,
-				});
+			if (docDate && lines.length) {
+				await updateTestOperationDocument(env, documentId, { docDate, description, lines });
 			}
 
-			return new Response(null, { status: 303, headers: { Location: `/accounting/${ledger}/journal?period=${encodeURIComponent(period)}` } });
+			return new Response(null, { status: 303, headers: { Location: returnTo.startsWith("/accounting") ? returnTo : "/accounting/kotopanda/journal" } });
 		}
 
-		const journalDeleteMatch = path.match(/^\/accounting\/(kotopanda|elitka)\/journal\/(\d+)\/delete$/);
-		if (journalDeleteMatch && request.method === "POST") {
-			const ledger = journalDeleteMatch[1] as Ledger;
+		const opDocDeleteMatch = path.match(/^\/operation-document-test\/(\d+)\/delete$/);
+		if (opDocDeleteMatch && request.method === "POST") {
 			const form = await request.formData();
-			const period = String(form.get("period") ?? "this_month");
-			await deleteManualEntry(env, Number(journalDeleteMatch[2]));
-			return new Response(null, { status: 303, headers: { Location: `/accounting/${ledger}/journal?period=${encodeURIComponent(period)}` } });
+			const returnTo = String(form.get("return_to") ?? "/accounting/kotopanda/journal");
+			await deleteTestOperationDocument(env, Number(opDocDeleteMatch[1]));
+			return new Response(null, { status: 303, headers: { Location: returnTo.startsWith("/accounting") ? returnTo : "/accounting/kotopanda/journal" } });
 		}
 
-		if (path === "/references/accounts" && request.method === "POST") {
+		// Администрирование — вкладка внутри Настроек (/settings/admin), доступна только
+		// is_admin-ролям (проверено выше общим guard'ом по sectionForPath, туда этот путь
+		// попадает как отдельный раздел "admin", не выдаваемый чекбоксами).
+		if (path === "/settings/admin/users" && request.method === "POST") {
 			const form = await request.formData();
-			const name = String(form.get("name") ?? "").trim();
-			if (name) await createOwnAccount(env, name);
-			return new Response(null, { status: 303, headers: { Location: "/references/accounts" } });
+			const username = String(form.get("username") ?? "").trim();
+			const password = String(form.get("password") ?? "");
+			const roleId = Number(form.get("role_id"));
+			if (username && password.length >= 4 && Number.isInteger(roleId)) {
+				await createUser(env, username, password, roleId);
+			}
+			return new Response(null, { status: 303, headers: { Location: "/settings/admin" } });
 		}
 
-		const accountUpdateMatch = path.match(/^\/references\/accounts\/(\d+)\/update$/);
-		if (accountUpdateMatch && request.method === "POST") {
+		const userRoleMatch = path.match(/^\/settings\/admin\/users\/(\d+)\/role$/);
+		if (userRoleMatch && request.method === "POST") {
 			const form = await request.formData();
-			const name = String(form.get("name") ?? "").trim();
-			if (name) await renameOwnAccount(env, Number(accountUpdateMatch[1]), name);
-			return new Response(null, { status: 303, headers: { Location: "/references/accounts" } });
+			const roleId = Number(form.get("role_id"));
+			if (Number.isInteger(roleId)) await setUserRole(env, Number(userRoleMatch[1]), roleId);
+			return new Response(null, { status: 303, headers: { Location: "/settings/admin" } });
 		}
 
-		const accountDeleteMatch = path.match(/^\/references\/accounts\/(\d+)\/delete$/);
-		if (accountDeleteMatch && request.method === "POST") {
-			const result = await deleteOwnAccount(env, Number(accountDeleteMatch[1]));
-			const location = result.ok ? "/references/accounts" : `/references/accounts?delete_error=${encodeURIComponent(result.reason ?? "")}`;
-			return new Response(null, { status: 303, headers: { Location: location } });
+		const userToggleActiveMatch = path.match(/^\/settings\/admin\/users\/(\d+)\/toggle-active$/);
+		if (userToggleActiveMatch && request.method === "POST") {
+			const userId = Number(userToggleActiveMatch[1]);
+			const row = await env.DB.prepare(`SELECT is_active FROM users WHERE id = ?`).bind(userId).first<{ is_active: number }>();
+			if (row) await setUserActive(env, userId, row.is_active !== 1);
+			return new Response(null, { status: 303, headers: { Location: "/settings/admin" } });
 		}
 
-		if (path === "/references/cash-boxes" && request.method === "POST") {
+		const userResetPasswordMatch = path.match(/^\/settings\/admin\/users\/(\d+)\/reset-password$/);
+		if (userResetPasswordMatch && request.method === "POST") {
 			const form = await request.formData();
-			const name = String(form.get("name") ?? "").trim();
-			if (name) await createCashBox(env, name);
-			return new Response(null, { status: 303, headers: { Location: "/references/cash-boxes" } });
+			const password = String(form.get("password") ?? "");
+			if (password.length >= 4) await resetUserPassword(env, Number(userResetPasswordMatch[1]), password);
+			return new Response(null, { status: 303, headers: { Location: "/settings/admin" } });
 		}
 
-		const cashBoxUpdateMatch = path.match(/^\/references\/cash-boxes\/(\d+)\/update$/);
-		if (cashBoxUpdateMatch && request.method === "POST") {
-			const form = await request.formData();
-			const name = String(form.get("name") ?? "").trim();
-			if (name) await renameCashBox(env, Number(cashBoxUpdateMatch[1]), name);
-			return new Response(null, { status: 303, headers: { Location: "/references/cash-boxes" } });
+		const userDeleteMatch = path.match(/^\/settings\/admin\/users\/(\d+)\/delete$/);
+		if (userDeleteMatch && request.method === "POST") {
+			if (Number(userDeleteMatch[1]) !== currentUser.id) await deleteUser(env, Number(userDeleteMatch[1]));
+			return new Response(null, { status: 303, headers: { Location: "/settings/admin" } });
 		}
 
-		const cashBoxDeleteMatch = path.match(/^\/references\/cash-boxes\/(\d+)\/delete$/);
-		if (cashBoxDeleteMatch && request.method === "POST") {
-			const result = await deleteCashBox(env, Number(cashBoxDeleteMatch[1]));
-			const location = result.ok ? "/references/cash-boxes" : `/references/cash-boxes?delete_error=${encodeURIComponent(result.reason ?? "")}`;
-			return new Response(null, { status: 303, headers: { Location: location } });
-		}
-
-		if (path === "/references/expenses" && request.method === "POST") {
-			const form = await request.formData();
-			const name = String(form.get("name") ?? "").trim();
-			if (name) await createExpenseItem(env, name);
-			return new Response(null, { status: 303, headers: { Location: "/references/expenses" } });
-		}
-
-		const expenseUpdateMatch = path.match(/^\/references\/expenses\/(\d+)\/update$/);
-		if (expenseUpdateMatch && request.method === "POST") {
+		if (path === "/settings/admin/roles" && request.method === "POST") {
 			const form = await request.formData();
 			const name = String(form.get("name") ?? "").trim();
-			if (name) await renameExpenseItem(env, Number(expenseUpdateMatch[1]), name);
-			return new Response(null, { status: 303, headers: { Location: "/references/expenses" } });
+			if (name) await createRole(env, name);
+			return new Response(null, { status: 303, headers: { Location: "/settings/admin" } });
 		}
 
-		const expenseDeleteMatch = path.match(/^\/references\/expenses\/(\d+)\/delete$/);
-		if (expenseDeleteMatch && request.method === "POST") {
-			const result = await deleteExpenseItem(env, Number(expenseDeleteMatch[1]));
-			const location = result.ok ? "/references/expenses" : `/references/expenses?delete_error=${encodeURIComponent(result.reason ?? "")}`;
-			return new Response(null, { status: 303, headers: { Location: location } });
-		}
-
-		if (path === "/references/employees" && request.method === "POST") {
+		const rolePermissionsMatch = path.match(/^\/settings\/admin\/roles\/(\d+)\/permissions$/);
+		if (rolePermissionsMatch && request.method === "POST") {
 			const form = await request.formData();
-			const name = String(form.get("name") ?? "").trim();
-			if (name) await createEmployee(env, name);
-			return new Response(null, { status: 303, headers: { Location: "/references/employees" } });
+			const sections = form.getAll("section").map((s) => String(s));
+			await updateRolePermissions(env, Number(rolePermissionsMatch[1]), sections);
+			return new Response(null, { status: 303, headers: { Location: "/settings/admin" } });
 		}
 
-		const employeeUpdateMatch = path.match(/^\/references\/employees\/(\d+)\/update$/);
-		if (employeeUpdateMatch && request.method === "POST") {
-			const form = await request.formData();
-			const name = String(form.get("name") ?? "").trim();
-			if (name) await renameEmployee(env, Number(employeeUpdateMatch[1]), name);
-			return new Response(null, { status: 303, headers: { Location: "/references/employees" } });
-		}
-
-		const employeeDeleteMatch = path.match(/^\/references\/employees\/(\d+)\/delete$/);
-		if (employeeDeleteMatch && request.method === "POST") {
-			const result = await deleteEmployee(env, Number(employeeDeleteMatch[1]));
-			const location = result.ok ? "/references/employees" : `/references/employees?delete_error=${encodeURIComponent(result.reason ?? "")}`;
-			return new Response(null, { status: 303, headers: { Location: location } });
-		}
-
-		if (path === "/references/other-operations" && request.method === "POST") {
-			const form = await request.formData();
-			const name = String(form.get("name") ?? "").trim();
-			if (name) await createOtherOperation(env, name);
-			return new Response(null, { status: 303, headers: { Location: "/references/other-operations" } });
-		}
-
-		const otherOperationUpdateMatch = path.match(/^\/references\/other-operations\/(\d+)\/update$/);
-		if (otherOperationUpdateMatch && request.method === "POST") {
-			const form = await request.formData();
-			const name = String(form.get("name") ?? "").trim();
-			if (name) await renameOtherOperation(env, Number(otherOperationUpdateMatch[1]), name);
-			return new Response(null, { status: 303, headers: { Location: "/references/other-operations" } });
-		}
-
-		const otherOperationDeleteMatch = path.match(/^\/references\/other-operations\/(\d+)\/delete$/);
-		if (otherOperationDeleteMatch && request.method === "POST") {
-			const result = await deleteOtherOperation(env, Number(otherOperationDeleteMatch[1]));
-			const location = result.ok ? "/references/other-operations" : `/references/other-operations?delete_error=${encodeURIComponent(result.reason ?? "")}`;
-			return new Response(null, { status: 303, headers: { Location: location } });
+		const roleDeleteMatch = path.match(/^\/settings\/admin\/roles\/(\d+)\/delete$/);
+		if (roleDeleteMatch && request.method === "POST") {
+			await deleteRole(env, Number(roleDeleteMatch[1]));
+			return new Response(null, { status: 303, headers: { Location: "/settings/admin" } });
 		}
 
 		let periodCookieToSet: string | null = null;
@@ -820,17 +752,15 @@ export default {
 		let html: string | undefined;
 		if (path === "/bank") {
 			html = await renderBankPage(env, url);
-		} else if (salesRegisterMatch(path, "")) {
-			html = await renderKassaPage(env, url, salesRegisterMatch(path, "")!);
-		} else if (salesRegisterMatch(path, "/day")) {
-			html = await renderKassaDayPage(env, url, salesRegisterMatch(path, "/day")!);
-		} else if (salesRegisterMatch(path, "/day/balance")) {
-			const registerCode = salesRegisterMatch(path, "/day/balance")!;
-			const dateParam = url.searchParams.get("date");
-			const date = dateParam && /^\d{4}-\d{2}-\d{2}$/.test(dateParam) ? dateParam : todayIso();
-			html = await renderKassaBalanceFragment(env, date, registerCode);
 		} else if (salesRegisterMatch(path, "/categories")) {
-			html = await renderKassaCategoriesPage(env, url, salesRegisterMatch(path, "/categories")!);
+			html = await renderCashTestCategoriesPage(env, url, salesRegisterMatch(path, "/categories")!);
+		} else if (salesRegisterMatch(path, "/day/balance")) {
+			const firm = salesRegisterMatch(path, "/day/balance")!;
+			const firmId = await resolveTestFirmId(env, firm);
+			const date = url.searchParams.get("date") ?? todayIso();
+			html = await renderCashTestBalanceFragment(env, firmId, date);
+		} else if (salesRegisterMatch(path, "")) {
+			html = await renderCashTestPage(env, url, salesRegisterMatch(path, "")!);
 		} else if (path === "/settings") {
 			html = await renderSettingsPage(env);
 		} else if (path === "/card-universal") {
@@ -839,39 +769,39 @@ export default {
 			html = await renderCardCategoriesPage(env, url);
 		} else if (path === "/bank/rules") {
 			html = await renderBankRulesPage(env);
-		} else if (path === "/references/suppliers") {
-			html = await renderSuppliersListPage(env, url);
-		} else if (path === "/offset") {
-			html = await renderOffsetPage(env, url);
-		} else if (accountingLedgerMatch(path, "")) {
-			html = await renderAccountingTurnoverPage(env, url, accountingLedgerMatch(path, "")!);
-		} else if (accountingLedgerMatch(path, "/turnover")) {
-			html = await renderAccountingTurnoverPage(env, url, accountingLedgerMatch(path, "/turnover")!);
-		} else if (accountingLedgerMatch(path, "/journal")) {
-			html = await renderAccountingJournalPage(env, url, accountingLedgerMatch(path, "/journal")!);
-		} else if (accountingLedgerMatch(path, "/card")) {
-			html = await renderAccountCardPage(env, url, accountingLedgerMatch(path, "/card")!);
-		} else if (accountingLedgerMatch(path, "/card/fragment")) {
-			html = await renderAccountCardFragment(env, url, accountingLedgerMatch(path, "/card/fragment")!);
-		} else if (path === "/references/accounts") {
-			html = await renderReferenceAccountsPage(env, url);
-		} else if (path === "/references/cash-boxes") {
-			html = await renderReferenceCashBoxesPage(env, url);
-		} else if (path === "/references/expenses") {
-			html = await renderReferenceExpensesPage(env, url);
-		} else if (path === "/references/employees") {
-			html = await renderReferenceEmployeesPage(env, url);
-		} else if (path === "/references/other-operations") {
-			html = await renderReferenceOtherOperationsPage(env, url);
+		} else if (testFirmMatch(path, "/accounting", "/operation-modal")) {
+			html = await renderJournalTurnoverTestOperationModalFragment(env, url, testFirmMatch(path, "/accounting", "/operation-modal")!);
+		} else if (testFirmMatch(path, "/accounting", "/card/fragment")) {
+			html = await renderJournalTurnoverTestAccountCardFragment(env, url, testFirmMatch(path, "/accounting", "/card/fragment")!);
+		} else if (testFirmMatch(path, "/accounting", "/turnover")) {
+			html = await renderJournalTurnoverTestPage(env, url, testFirmMatch(path, "/accounting", "/turnover")!);
+		} else if (testFirmMatch(path, "/accounting", "/journal")) {
+			html = await renderJournalDocumentsTestPage(env, url, testFirmMatch(path, "/accounting", "/journal")!);
+		} else if (testFirmMatch(path, "/accounting", "")) {
+			html = await renderJournalTurnoverTestPage(env, url, testFirmMatch(path, "/accounting", "")!);
+		} else if (path.match(/^\/settings\/references\/([a-z-]+)$/)) {
+			const slug = path.match(/^\/settings\/references\/([a-z-]+)$/)![1];
+			const entry = testRefEntryForSlug(slug);
+			if (entry) html = await renderTestReferencePage(env, entry);
+		} else if (path === "/settings/chart") {
+			html = await renderChartOfAccountsTestPage(env);
+		} else if (path === "/journal-list-test") {
+			html = await renderJournalListTestPage(env, url);
+		} else if (path === "/settings/admin") {
+			html = await renderAdminPage(env, currentUser.username);
 		} else if (PLACEHOLDER_PATHS.includes(path)) {
-			html = renderPlaceholderPage(path);
+			html = renderPlaceholderPage(path, env);
 		}
 
 		if (!html) {
 			return new Response("Not found", { status: 404 });
 		}
 
-		const headers: Record<string, string> = { "content-type": "text/html; charset=utf-8" };
+		// no-store — вся эта страница персональная (сессия) и постоянно меняется, кэшировать её
+		// нигде (ни браузеру, ни Cloudflare edge) не нужно. Без этого заголовка изредка ловили
+		// заведомо устаревший HTML после деплоя (см. обсуждение про "долбоеб это" — уже
+		// исправленная на сервере форма всё ещё показывалась из чьего-то кэша).
+		const headers: Record<string, string> = { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" };
 		if (periodCookieToSet !== null) {
 			headers["set-cookie"] = `${PERIOD_COOKIE_NAME}=${encodeURIComponent(periodCookieToSet)}; Path=/; Max-Age=31536000; SameSite=Lax`;
 		}
