@@ -1,4 +1,5 @@
 import { syncBankPosting } from "./bankPostingTest";
+import { resolveTestFirmId } from "./operationDocumentTest";
 
 type PostingRule = {
 	match_field: "counterparty_account" | "counterparty_name";
@@ -33,23 +34,30 @@ function matchAgainst(rules: PostingRule[], counterpartyAccount: string | null, 
 	return null;
 }
 
-// Загружает правила один раз и возвращает функцию сопоставления — используется и при
-// синхронизации (по одной операции за раз), и при массовом прогоне по уже загруженным.
+// Загружает правила один раз и возвращает функцию сопоставления — используется при
+// прогоне по операциям без проводки (кнопка «Применить правила» и конец синхронизации).
 export async function createRuleMatcher(db: D1Database): Promise<(counterpartyAccount: string | null, counterpartyName: string | null) => RuleMatch | null> {
 	const rules = await loadRules(db);
 	return (counterpartyAccount, counterpartyName) => matchAgainst(rules, counterpartyAccount, counterpartyName);
 }
 
-// Задним числом применяет правила к уже загруженным операциям без разноски.
-// Не трогает операции, которые уже размечены (вручную или предыдущим прогоном правил).
-// Каждое совпадение сразу же проводится в test_journal через syncBankPosting (та же связка, что
-// и ручное сохранение в drawer, см. transactions.ts) — поэтому здесь не единый batch, а
-// последовательные запросы по каждой операции.
+// Проводит в test_journal операции банка, у которых ещё нет документа.
+// Совпадение с правилом — основной путь (синхронизация и кнопка «Применить правила»).
+// Строка, у которой разноска уже проставлена, а документа нет, тоже проводится: старая
+// синхронизация писала posting_account и не вызывала syncBankPosting, а отбор
+// «posting_account IS NULL» такие операции больше не видел.
+// Уже проведённые (journal_document_id задан) не трогаем.
+// Каждое совпадение сразу пишется через syncBankPosting (та же связка, что и ручное
+// сохранение в drawer, см. transactions.ts) — поэтому здесь не batch, а запрос на операцию.
 export async function applyRulesToExisting(env: Env): Promise<number> {
 	const matcher = await createRuleMatcher(env.DB);
+	// Приватбанк всегда фирма Котопанда. У правил, заведённых до колонки firm_id, она пустая,
+	// а syncBankPosting без фирмы снимает разноску и проводку не создаёт.
+	const defaultFirmId = await resolveTestFirmId(env, "kotopanda");
 
 	const { results: candidates } = await env.DB.prepare(
-		`SELECT id, operation_date, direction, amount, counterparty_account, counterparty_name FROM bank_transactions WHERE posting_account IS NULL`,
+		`SELECT id, operation_date, direction, amount, counterparty_account, counterparty_name, posting_account, posting_subconto, firm_id
+		 FROM bank_transactions WHERE journal_document_id IS NULL`,
 	).all<{
 		id: number;
 		operation_date: string;
@@ -57,22 +65,31 @@ export async function applyRulesToExisting(env: Env): Promise<number> {
 		amount: number;
 		counterparty_account: string | null;
 		counterparty_name: string | null;
+		posting_account: string | null;
+		posting_subconto: string | null;
+		firm_id: number | null;
 	}>();
 
 	let applied = 0;
 	for (const tx of candidates) {
 		const match = matcher(tx.counterparty_account, tx.counterparty_name);
-		if (!match) continue;
+		const account = match?.posting_account ?? tx.posting_account;
+		if (!account) continue;
+
+		const subconto = match ? match.posting_subconto : tx.posting_subconto;
+		const firmId = match?.firm_id ?? tx.firm_id ?? defaultFirmId;
 
 		await syncBankPosting(
 			env,
 			tx.id,
 			{ operationDate: tx.operation_date, direction: tx.direction, amount: tx.amount, counterpartyName: tx.counterparty_name, journalDocumentId: null },
-			match.posting_account,
-			match.posting_subconto,
-			match.firm_id,
+			account,
+			subconto,
+			firmId,
 		);
-		await env.DB.prepare(`UPDATE bank_transactions SET status = ? WHERE id = ?`).bind(match.status, tx.id).run();
+		if (match) {
+			await env.DB.prepare(`UPDATE bank_transactions SET status = ? WHERE id = ?`).bind(match.status, tx.id).run();
+		}
 		applied++;
 	}
 

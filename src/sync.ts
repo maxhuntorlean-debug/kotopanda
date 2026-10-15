@@ -1,5 +1,5 @@
 import { fetchPrivatBalanceAnchor, fetchPrivatTransactions, type PrivatTransaction } from "./privat";
-import { createRuleMatcher } from "./rules";
+import { applyRulesToExisting } from "./rules";
 
 // Банк переходит на новую (тестовую) схему разноски — старые данные и правила разноски
 // очищены (см. обсуждение "тестовые станут боевыми"), поэтому первая синхронизация после
@@ -39,15 +39,15 @@ export async function syncBankAccount(env: Env): Promise<SyncResult> {
 
 	let added = 0;
 	if (transactions.length > 0) {
-		const matcher = await createRuleMatcher(env.DB);
-
-		const statements = transactions.map((t: PrivatTransaction) => {
-			const match = matcher(t.AUT_CNTR_ACC ?? null, t.AUT_CNTR_NAM ?? null);
-
-			return env.DB.prepare(
+		// Разноску и проводку сюда не пишем: совпадение с правилом только помечало
+		// posting_account и не создавало документ в журнале, а «Применить правила» такие
+		// строки потом пропускало (posting_account уже не NULL). Проводку создаёт
+		// applyRulesToExisting ниже — и для новых операций, и для уже помеченных без документа.
+		const statements = transactions.map((t: PrivatTransaction) =>
+			env.DB.prepare(
 				`INSERT INTO bank_transactions
-					(account_id, external_id, operation_date, direction, amount, currency, counterparty_name, counterparty_account, purpose, status, posting_account, posting_subconto, raw_json)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+					(account_id, external_id, operation_date, direction, amount, currency, counterparty_name, counterparty_account, purpose, status, raw_json)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'review', ?)
 				 ON CONFLICT(account_id, external_id) DO NOTHING`,
 			).bind(
 				account.id,
@@ -59,12 +59,9 @@ export async function syncBankAccount(env: Env): Promise<SyncResult> {
 				t.AUT_CNTR_NAM ?? null,
 				t.AUT_CNTR_ACC ?? null,
 				t.OSND ?? null,
-				match?.status ?? "review",
-				match?.posting_account ?? null,
-				match?.posting_subconto ?? null,
 				JSON.stringify(t),
-			);
-		});
+			),
+		);
 
 		const results = await env.DB.batch(statements);
 		added = results.reduce((sum, r) => sum + (r.meta.changes ?? 0), 0);
@@ -76,6 +73,8 @@ export async function syncBankAccount(env: Env): Promise<SyncResult> {
 			.bind(anchor.date, anchor.amount, account.id)
 			.run();
 	}
+
+	await applyRulesToExisting(env);
 
 	return { fetched: transactions.length, added };
 }
